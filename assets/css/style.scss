@@ -1,0 +1,19 @@
+---
+---
+
+@import "{{ site.theme }}";
+
+header, footer {
+  display: none !important;
+}
+
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.wrapper, section {
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
+}
