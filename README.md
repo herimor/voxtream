@@ -4,13 +4,13 @@
 
   <!-- badges -->
   <p>
-    <a href="https://herimor.github.io/voxtream" target="_blank">
+    <a href="https://arxiv.org/pdf/2509.15969" target="_blank">
       <img src="https://img.shields.io/badge/arXiv-Paper-COLOR.svg" />
     </a>
     <a href="https://github.com/herimor/voxtream" target="_blank">
       <img src="https://img.shields.io/badge/GitHub-Code-green" />
     </a>
-    <a href="https://herimor.github.io/voxtream" target="_blank">
+    <a href="https://huggingface.co/herimor/voxtream" target="_blank">
       <img src="https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Model-yellow" />
     </a>
   </p>
@@ -36,7 +36,7 @@
   </div>
 
   <iframe
-    src="https://www.youtube-nocookie.com/embed/6ZZ_-dpeyxg?si=dqh-uVizpw3ZCBuo"
+    src="https://www.youtube-nocookie.com/embed/KXvq72rdDtc?si=_rwHlQrm7S_F9dlF"
     width="560"
     height="315"
     title="VoXtream demo"
@@ -122,6 +122,10 @@
   <!-- stream audio -->
   <h2>Full-stream Zero-shot TTS</h2>
 
+  <p style="font-size: 16px;">
+  In the full-stream scenario, the input text comes incrementally, word by word, emulating the output of LLM.
+  </p>
+
   <div style="
        width:100%;
        overflow-x:auto;
@@ -144,16 +148,16 @@
     </thead>
     <tbody>
     <tr>
-        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/1188-133604-0027.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
-        <td style="vertical-align: middle; height: 100px;border:0; overflow-wrap: break-word; white-space: normal;">the two trees still drawn leaf by leaf wholly formal but beautiful mist coming gradually into the distance</td>
-        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/1188-133604-0027_cosyvoice2.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
-        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/1188-133604-0027_voxtream.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
+        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/7176-88083-0021.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
+        <td style="vertical-align: middle; height: 100px;border:0; overflow-wrap: break-word; white-space: normal;">were too much for his pursuer and he was able to flap his way onward in a cloud of foam while doom hung low above his head yet hesitated to strike</td>
+        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/7176-88083-0021_cosyvoice2.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
+        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/7176-88083-0021_voxtream.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
     </tr>
     <tr>
-        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/237-134493-0002.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
-        <td style="vertical-align: middle; height: 100px;border:0; overflow-wrap: break-word; white-space: normal;">a vast checker board marked off in squares of wheat and corn light and dark dark and light</td>
-        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/237-134493-0002_cosyvoice2.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
-        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/237-134493-0002_voxtream.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
+        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/1221-135767-0007.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
+        <td style="vertical-align: middle; height: 100px;border:0; overflow-wrap: break-word; white-space: normal;">the other and only in consequence of that identity had hester contrived so perfectly to represent the scarlet letter in her appearance</td>
+        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/1221-135767-0007_cosyvoice2.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
+        <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/1221-135767-0007_voxtream.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
     </tr>
     <tr>
         <td style="vertical-align : middle;text-align:center;border:0;"><audio controls="controls" style="width: 200px;"><source src="assets/audio/2300-131720-0019.wav" autoplay="">Your browser does not support the audio element.</audio><br> </td>
@@ -205,7 +209,7 @@
   <pre class="bibtex">@article{torgashov2025voxtream,
   author    = {Torgashov, Nikita and Henter, Gustav Eje and Skantze, Gabriel},
   title     = {Vo{X}tream: Full-Stream Text-to-Speech with Extremely Low Latency},
-  journal   = {arXiv},
+  journal   = {arXiv:2509.15969},
   year      = {2025}
 }</pre>
 </div>
