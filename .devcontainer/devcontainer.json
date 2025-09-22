@@ -1,0 +1,22 @@
+{
+    "name": "VoXtream",
+    "dockerComposeFile": "docker-compose.yaml",
+    "service": "voxtream",
+    "workspaceFolder": "/workspace",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-toolsai.jupyter",
+                "ms-azuretools.vscode-docker",
+                "ms-vscode-remote.remote-resource-monitor"
+            ],
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "python.defaultInterpreterPath": "/opt/conda/bin/python"
+            }
+        }
+    },
+    "remoteUser": "root",
+    "overrideCommand": true
+  }

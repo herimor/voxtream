@@ -1,0 +1,48 @@
+{
+    "sil_token": 69,
+    "bos_token": 71,
+    "eos_token": 72,
+    "end_pad": 5,
+    "num_codebooks": 12,
+    "num_phones_per_frame": 2,
+    "audio_delay_frames": 1,
+    "temperature": 0.9,
+    "topk": 5,
+    "max_audio_length_ms": 60000,
+    "device": "cuda",
+    "model_repo": "herimor/voxtream",
+    "model_name": "model.safetensors",
+    "model_config_name": "config.json",
+    "mimi_sr": 24000,
+    "mimi_vocab_size": 2048,
+    "mimi_frame_ms": 80,
+    "mimi_repo": "kyutai/moshiko-pytorch-bf16",
+    "mimi_name": "tokenizer-e351c8d8-checkpoint125.safetensors",
+    "spk_enc_sr": 16000,
+    "spk_enc_repo": "IDRnD/ReDimNet",
+    "spk_enc_model": "ReDimNet",
+    "spk_enc_model_name": "M",
+    "spk_enc_train_type": "ft_mix",
+    "spk_enc_dataset": "vb2+vox2+cnc",
+    "phoneme_dict_name": "phoneme_to_token.json",
+    "nltk_resource": "taggers/averaged_perceptron_tagger_eng",
+    "cache_prompt": true,
+    "phoneme_index_map": {
+        "0": [
+            0,
+            1
+        ],
+        "1": [
+            0,
+            2
+        ],
+        "2": [
+            1,
+            1
+        ],
+        "3": [
+            1,
+            2
+        ]
+    }
+}

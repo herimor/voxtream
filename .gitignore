@@ -1,0 +1,6 @@
+.vscode/
+__pycache__/
+*.pyc
+assets/audio/*.npy
+assets/benchmark/*.npy
+experiments/

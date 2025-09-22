@@ -1,0 +1,13 @@
+torch==2.4.0
+torchaudio==2.4.0
+torchtune==0.4.0
+torchao==0.9.0
+lightning==2.4.0
+moshi==0.2.2
+huggingface_hub==0.28.1
+g2p-en==2.1.0
+soundfile==0.13.1
+inflect==7.5.0
+nltk==3.9.1
+hydra-core==1.3.2
+tensorboard==2.19.0

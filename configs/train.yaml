@@ -1,0 +1,66 @@
+hydra:
+  run:
+    dir: experiments/${exp_name}
+  output_subdir: null
+
+exp_name: voxtream_train
+model_repo: herimor/voxtream
+dataset_repo: herimor/voxtream-train-9k
+dep_former_name: dep_former_csm.safetensors
+
+batch_size: 32
+lr: 0.0005
+initial_lr: 0.00001
+max_epochs: 9
+warmup_epochs: 1
+weight_decay: 0.01
+precision: bf16-mixed
+gradient_clip_val: 0.5
+seed: 42
+num_workers: 8
+log_every_n_steps: 50
+gpus: -1
+logging_interval: step
+save_weights_only: true
+strategy: ddp
+
+dataset:
+  datasets:
+    emilia:
+      audio_codes: mimi_codes_16cb.npy
+      phoneme_sequence_map: phone_tokens.npy
+      phoneme_embedding_indices: phone_emb_indices.npy
+      semantic_label_shifts: sem_label_shifts.npy
+      spk_templates: spk_templates.npy
+    hifitts2:
+      audio_codes: mimi_codes_16cb.npy
+      phoneme_sequence_map: phone_tokens.npy
+      phoneme_embedding_indices: phone_emb_indices.npy
+      semantic_label_shifts: sem_label_shifts.npy
+      spk_templates: spk_templates.npy
+  
+  audio_delay_frames: 1
+  pad_len: 1
+  semantic_label_pad: 2
+  num_phones_per_frame: 2
+  dtype: int64
+  phoneme_index_map:
+    "0": 2
+    "1": 3
+    "2": 2
+    "3": 3
+
+model:
+  phone_former: phone_former
+  temp_former: temp_former
+  dep_former: dep_former_csm
+  phone_vocab_size: 73
+  audio_vocab_size: 2049
+  embedding_dim: 1024
+  spk_embedding_dim: 192
+  num_codebooks: 12
+  num_phone_states: 4
+  amortization_divisor: 16
+  look_ahead: 2
+  audio_window_size: 250
+  phone_window_size: 350
