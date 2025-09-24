@@ -26,7 +26,8 @@
     "spk_enc_dataset": "vb2+vox2+cnc",
     "phoneme_dict_name": "phoneme_to_token.json",
     "nltk_resource": "taggers/averaged_perceptron_tagger_eng",
-    "cache_prompt": true,
+    "aligner": "charsiu/en_w2v2_fc_10ms",
+    "cache_prompt": false,
     "phoneme_index_map": {
         "0": [
             0,
