@@ -13,7 +13,3 @@ WORKDIR /workspace
 # Copy dependencies
 COPY . /workspace/
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install MFA
-RUN conda install -c conda-forge montreal-forced-aligner==3.3.4 -y
-ENV LD_LIBRARY_PATH=/opt/conda/lib:$LD_LIBRARY_PATH

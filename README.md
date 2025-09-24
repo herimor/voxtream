@@ -22,8 +22,6 @@ We present VoXtream, a fully autoregressive, zero-shot streaming text-to-speech 
 conda create -n voxtream python=3.11 -y
 conda activate voxtream
 pip install -r requirements.txt --no-cache-dir
-conda install -c conda-forge montreal-forced-aligner==3.3.4 -y
-conda install -c conda-forge kalpy==0.7.2 -y
 ```
 
 ### Docker
@@ -44,7 +42,7 @@ python run.py \
     --text "In general, however, some method is then needed to evaluate each approximation." \
     --output "output_stream.wav"
 ```
-* Note: Initial run may take some additional time to prepare MFA alignment for the prompt.
+* Note: Initial run may take some additional time to download model weights.
 
 ### Full streaming
 ```bash
@@ -83,6 +81,7 @@ To evaluate model's real time factor (RTF) and First packet latency (FPL) use `b
 
 ## TODO
 
+- [x] Add a neural phoneme aligner. Remove MFA dependency
 - [ ] Gradio demo
 - [ ] HuggingFace Spaces demo
 - [ ] Evaluation scripts

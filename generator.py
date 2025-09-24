@@ -15,9 +15,9 @@ import torchaudio
 from torchaudio.transforms import Resample
 
 from model import Model, ModelConfig
+from utils.aligner import CharsiuForcedAligner
 from utils.generator import (
     normalize_text,
-    mfa_align,
     align_prompt,
     ensure_nltk_resource
 )
@@ -53,6 +53,7 @@ class SpeechGeneratorConfig:
     phoneme_index_map: Dict
     phoneme_dict_name: str
     nltk_resource: str
+    aligner: str
     cache_prompt: bool
 
 
@@ -72,6 +73,9 @@ class SpeechGenerator:
         # G2P
         self.g2p = G2p()
         ensure_nltk_resource(config.nltk_resource)
+
+        # Phoneme aligner
+        self.aligner = CharsiuForcedAligner(aligner=config.aligner)
 
         self.decoder_fn = torch.compile(
             model=self.model.generate_frame,
@@ -115,7 +119,8 @@ class SpeechGenerator:
             config.spk_enc_model,
             model_name=config.spk_enc_model_name, 
             train_type=config.spk_enc_train_type, 
-            dataset=config.spk_enc_dataset
+            dataset=config.spk_enc_dataset,
+            verbose=False
         ).to(config.device).half()
         model.spec.float()
         model.bn.float()
@@ -123,8 +128,7 @@ class SpeechGenerator:
 
         return model
 
-    def encode_audio_prompt(self, prompt_audio_path: Path) -> torch.Tensor:
-        waveform, orig_sr = torchaudio.load(prompt_audio_path)
+    def encode_audio_prompt(self, waveform: torch.Tensor, orig_sr: int) -> torch.Tensor:
         if orig_sr != self.config.mimi_sr:
             resampler = Resample(orig_sr, self.config.mimi_sr)
             waveform = resampler(waveform)
@@ -144,8 +148,7 @@ class SpeechGenerator:
 
         return padded_tokens
 
-    def extract_speaker_template(self, prompt_audio_path: Path) -> torch.Tensor:
-        waveform, orig_sr = torchaudio.load(prompt_audio_path)
+    def extract_speaker_template(self, waveform: torch.Tensor, orig_sr: int) -> torch.Tensor:
         if orig_sr != self.config.spk_enc_sr:
             resampler = Resample(orig_sr, self.config.spk_enc_sr)
             waveform = resampler(waveform)
@@ -175,19 +178,22 @@ class SpeechGenerator:
             prompt_phone_tokens = torch.from_numpy(prompt_data['phone_tokens']).to(self.config.device)
             phone_emb_indices = torch.from_numpy(prompt_data['phone_emb_indices']).to(self.config.device)
         else:
+            waveform, orig_sr = torchaudio.load(prompt_audio_path)
+
             # 1. Extract mimi codes
-            mimi_codes = self.encode_audio_prompt(prompt_audio_path)
+            mimi_codes = self.encode_audio_prompt(waveform, orig_sr)
             # 2. Extract speaker embedding
-            spk_embedding = self.extract_speaker_template(prompt_audio_path)
+            spk_embedding = self.extract_speaker_template(waveform, orig_sr)
 
             # 3. Align prompt text to audio
             # TODO: Add Whisper transcription if prompt_text is not provided
-            mfa_path = prompt_audio_path.parent / f'{prompt_audio_path.stem}.mfa.json'
-            if not mfa_path.exists():
-                phoneme_alignment = mfa_align(prompt_audio_path, prompt_text)
-            else:
-                phoneme_alignment = str(mfa_path)
+            phoneme_alignment = self.aligner.align(
+                audio=waveform,
+                orig_sr=orig_sr,
+                text=prompt_text
+            )
             
+            # 4. Convert alignment to phone tokens and phone embedding indices
             prompt_phone_tokens, phone_emb_indices = align_prompt(
                 row=(phoneme_alignment, mimi_codes.shape[-1] - 1), # -1 because the first token is <PAD>
                 phones_per_frame=self.config.num_phones_per_frame,

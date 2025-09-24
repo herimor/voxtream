@@ -90,7 +90,7 @@ def ensure_nltk_resource(resource: str):
     try:
         nltk.data.find(resource)
     except LookupError:
-        nltk.download(resource.split("/")[-1])
+        nltk.download(resource.split("/")[-1], quiet=True, raise_on_error=True)
 
 
 def mfa_align(
