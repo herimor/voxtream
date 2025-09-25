@@ -16,27 +16,15 @@ We present VoXtream, a fully autoregressive, zero-shot streaming text-to-speech 
 
 ## Installation
 
-### Conda
-
 ```bash
-conda create -n voxtream python=3.11 -y
-conda activate voxtream
-pip install -r requirements.txt --no-cache-dir
-```
-
-### Docker
-
-The `GPU_IDS` variable is used to specify which GPUs will be available insider the container (useful for multi-GPU machines). You can specify multiple GPUs, ex. `GPU_IDS=0,1,2 docker-compose -f ...`. If you have another version of Docker compose installed use `docker compose -f ...` instead.
-```bash
-docker-compose -f .devcontainer/docker-compose.yaml build voxtream
-GPU_IDS=0 docker-compose -f .devcontainer/docker-compose.yaml run voxtream
+pip install voxtream
 ```
 
 ## Usage
 
 ### Output streaming
 ```bash
-python run.py \
+voxtream \
     --prompt-audio assets/audio/male.wav \
     --prompt-text "The liquor was first created as 'Brandy Milk', produced with milk, brandy and vanilla." \
     --text "In general, however, some method is then needed to evaluate each approximation." \
@@ -46,7 +34,7 @@ python run.py \
 
 ### Full streaming
 ```bash
-python run.py \
+voxtream \
     --prompt-audio assets/audio/female.wav \
     --prompt-text "Betty Cooper helps Archie with cleaning a store room, when Reggie attacks her." \
     --text "Staff do not always do enough to prevent violence." \
@@ -56,7 +44,7 @@ python run.py \
 
 ## Training
 
-- Build the Docker container:
+- Build the Docker container. If you have another version of Docker compose installed use `docker compose -f ...` instead.
 ```bash
 docker-compose -f .devcontainer/docker-compose.yaml build voxtream
 ```
@@ -65,12 +53,12 @@ docker-compose -f .devcontainer/docker-compose.yaml build voxtream
 
 Example of running the training using 2 GPUs with batch size 32:
 ```bash
-GPU_IDS=0,1 docker-compose -f .devcontainer/docker-compose.yaml run voxtream python train.py batch_size=32
+GPU_IDS=0,1 docker-compose -f .devcontainer/docker-compose.yaml run voxtream python voxtream/train.py batch_size=32
 ```
 
 ## Benchmark
 
-To evaluate model's real time factor (RTF) and First packet latency (FPL) use `benchmark.py` script. You can compile model for faster inference using `--compile` flag (note that initial compilation take some time).
+To evaluate model's real time factor (RTF) and First packet latency (FPL) run `voxtream-benchmark`. You can compile model for faster inference using `--compile` flag (note that initial compilation take some time).
 
 | Device  | Compiled           | FPL, ms | RTF  |
 | :-:     | :-:                | :-:     | :-:  |
@@ -82,6 +70,7 @@ To evaluate model's real time factor (RTF) and First packet latency (FPL) use `b
 ## TODO
 
 - [x] Add a neural phoneme aligner. Remove MFA dependency
+- [x] Add PyPI package
 - [ ] Gradio demo
 - [ ] HuggingFace Spaces demo
 - [ ] Evaluation scripts

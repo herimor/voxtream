@@ -1,32 +1,32 @@
 # The code is partially borrowed from https://github.com/lingjzhu/charsiu
 # Charsiu: A transformer-based phonetic aligner: https://arxiv.org/pdf/2110.03876
 
-import re
 import json
+import re
 import unicodedata
+from itertools import chain, groupby
 from pathlib import Path
-from itertools import groupby, chain
+from typing import Any, Dict
 
 import numpy as np
 import torch
 import torch.nn as nn
-from torchaudio.transforms import Resample
-
-from nltk.tokenize import word_tokenize
 from g2p_en import G2p
 from g2p_en.expand import normalize_numbers
-from librosa.sequence import dtw
 from huggingface_hub import hf_hub_download
+from librosa.sequence import dtw
+from nltk.tokenize import word_tokenize
+from torchaudio.transforms import Resample
 from transformers import (
+    Wav2Vec2Config,
+    Wav2Vec2CTCTokenizer,
+    Wav2Vec2FeatureExtractor,
     Wav2Vec2ForCTC,
     Wav2Vec2Processor,
-    Wav2Vec2FeatureExtractor,
-    Wav2Vec2CTCTokenizer,
-    Wav2Vec2Config
 )
 from transformers.modeling_outputs import CausalLMOutput
 
-from utils.generator import ensure_nltk_resource
+from voxtream.utils.generator import ensure_nltk_resource
 
 
 def forced_align(cost: np.ndarray, phone_ids: list[int]) -> list[int]:
@@ -45,8 +45,7 @@ def forced_align(cost: np.ndarray, phone_ids: list[int]) -> list[int]:
     list[int]
         Alignment indices mapping frames to phone IDs.
     """
-    D, align = dtw(C=-cost[:, phone_ids],
-                   step_sizes_sigma=np.array([[1, 1], [1, 0]]))
+    D, align = dtw(C=-cost[:, phone_ids], step_sizes_sigma=np.array([[1, 1], [1, 0]]))
 
     align_seq = [-1 for _ in range(max(align[:, 0]) + 1)]
     for i in align:
@@ -56,7 +55,9 @@ def forced_align(cost: np.ndarray, phone_ids: list[int]) -> list[int]:
     return list(align_seq)
 
 
-def seq2duration(phones: list[str], resolution: float = 0.01) -> list[tuple[float, float, str]]:
+def seq2duration(
+    phones: list[str], resolution: float = 0.01
+) -> list[tuple[float, float, str]]:
     """
     Convert a sequence of phones into durations.
 
@@ -76,11 +77,13 @@ def seq2duration(phones: list[str], resolution: float = 0.01) -> list[tuple[floa
     durations = []
     for phone, group in groupby(phones):
         length = len(list(group))
-        durations.append((
-            round(counter * resolution, 2),
-            round((counter + length) * resolution, 2),
-            phone
-        ))
+        durations.append(
+            (
+                round(counter * resolution, 2),
+                round((counter + length) * resolution, 2),
+                phone,
+            )
+        )
         counter += length
     return durations
 
@@ -100,11 +103,15 @@ class Wav2Vec2ForFrameClassification(Wav2Vec2ForCTC):
                     del config["gradient_checkpointing"]
 
                 config = Wav2Vec2Config(**config)
-            
+
             # Load the model normally (ignoring gradient_checkpointing)
-            model = super().from_pretrained(pretrained_model_name_or_path, *args, config=config, **kwargs)
+            model = super().from_pretrained(
+                pretrained_model_name_or_path, *args, config=config, **kwargs
+            )
         else:
-            model = super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
+            model = super().from_pretrained(
+                pretrained_model_name_or_path, *args, **kwargs
+            )
 
         return model
 
@@ -117,7 +124,9 @@ class Wav2Vec2ForFrameClassification(Wav2Vec2ForCTC):
         return_dict: bool | None = None,
         labels: torch.Tensor | None = None,
     ) -> CausalLMOutput:
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.wav2vec2(
             input_values,
@@ -133,7 +142,9 @@ class Wav2Vec2ForFrameClassification(Wav2Vec2ForCTC):
         loss = None
         if labels is not None:
             if labels.max() >= self.config.vocab_size:
-                raise ValueError(f"Label values must be <= vocab_size ({self.config.vocab_size})")
+                raise ValueError(
+                    f"Label values must be <= vocab_size ({self.config.vocab_size})"
+                )
 
             if attention_mask is None:
                 attention_mask = torch.ones_like(input_values, dtype=torch.long)
@@ -157,13 +168,25 @@ class Wav2Vec2ForFrameClassification(Wav2Vec2ForCTC):
 
 
 class CharsiuPreprocessor:
-    """Abstract base class for Charsiu preprocessing."""
+    """English G2P-based Charsiu preprocessor."""
 
-    def get_phones_and_words(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def get_phone_ids(self, *args, **kwargs):
-        raise NotImplementedError
+    def __init__(self):
+        tokenizer = Wav2Vec2CTCTokenizer.from_pretrained("charsiu/tokenizer_en_cmu")
+        feature_extractor = Wav2Vec2FeatureExtractor(
+            feature_size=1,
+            sampling_rate=16000,
+            padding_value=0.0,
+            do_normalize=True,
+            return_attention_mask=False,
+        )
+        self.processor = Wav2Vec2Processor(
+            feature_extractor=feature_extractor,
+            tokenizer=tokenizer,
+        )
+        self.g2p = G2p()
+        self.sil = "[SIL]"
+        self.sil_idx = self.mapping_phone2id(self.sil)
+        self.punctuation = set()
 
     def mapping_phone2id(self, phone: str) -> int:
         """Convert a phone to its numerical ID."""
@@ -173,7 +196,9 @@ class CharsiuPreprocessor:
         """Convert a numerical ID to its phone symbol."""
         return self.processor.tokenizer.convert_ids_to_tokens(idx)
 
-    def audio_preprocess(self, audio: torch.Tensor, orig_sr: int, sr: int = 16000) -> torch.Tensor:
+    def audio_preprocess(
+        self, audio: torch.Tensor, orig_sr: int, sr: int = 16000
+    ) -> torch.Tensor:
         """
         Load and normalize audio for model input.
 
@@ -194,29 +219,9 @@ class CharsiuPreprocessor:
         if orig_sr != sr:
             audio = Resample(orig_sr, sr)(audio)
 
-        return self.processor(audio, sampling_rate=sr, return_tensors="pt").input_values.squeeze()
-
-
-class CharsiuPreprocessor_en(CharsiuPreprocessor):
-    """English G2P-based Charsiu preprocessor."""
-
-    def __init__(self):
-        tokenizer = Wav2Vec2CTCTokenizer.from_pretrained("charsiu/tokenizer_en_cmu")
-        feature_extractor = Wav2Vec2FeatureExtractor(
-            feature_size=1,
-            sampling_rate=16000,
-            padding_value=0.0,
-            do_normalize=True,
-            return_attention_mask=False,
-        )
-        self.processor = Wav2Vec2Processor(
-            feature_extractor=feature_extractor,
-            tokenizer=tokenizer,
-        )
-        self.g2p = G2p()
-        self.sil = "[SIL]"
-        self.sil_idx = self.mapping_phone2id(self.sil)
-        self.punctuation = set()
+        return self.processor(
+            audio, sampling_rate=sr, return_tensors="pt"
+        ).input_values.squeeze()
 
     def get_phones_and_words(self, sentence: str) -> tuple[list[tuple[str]], list[str]]:
         """
@@ -238,7 +243,7 @@ class CharsiuPreprocessor_en(CharsiuPreprocessor):
         phones = [tuple(g) for k, g in groupby(phones, key=lambda x: x != " ") if k]
 
         aligned_phones, aligned_words = [], []
-        for p, w in zip(phones, words):
+        for p, w in zip(phones, words, strict=False):
             if re.search(r"\w+\d?", p[0]):
                 aligned_phones.append(p)
                 aligned_words.append(w)
@@ -249,7 +254,9 @@ class CharsiuPreprocessor_en(CharsiuPreprocessor):
         assert len(aligned_words) == len(aligned_phones)
         return aligned_phones, aligned_words
 
-    def get_phone_ids(self, phones: list[tuple[str]], append_silence: bool = True) -> list[int]:
+    def get_phone_ids(
+        self, phones: list[tuple[str]], append_silence: bool = True
+    ) -> list[int]:
         """
         Convert phone sequence to IDs, with optional silence padding.
 
@@ -280,7 +287,8 @@ class CharsiuPreprocessor_en(CharsiuPreprocessor):
         text = str(text)
         text = normalize_numbers(text)
         text = "".join(
-            char for char in unicodedata.normalize("NFD", text)
+            char
+            for char in unicodedata.normalize("NFD", text)
             if unicodedata.category(char) != "Mn"
         ).lower()
         text = re.sub(r"[^ a-z'.,?!\-]", "", text)
@@ -311,7 +319,7 @@ class CharsiuPreprocessor_en(CharsiuPreprocessor):
         list[tuple[float, float, str]]
             Word-level alignment.
         """
-        words_rep = [w for ph, w in zip(phones, words) for _ in ph]
+        words_rep = [w for ph, w in zip(phones, words, strict=False) for _ in ph]
         phones_rep = [re.sub(r"\d", "", p) for ph in phones for p in ph]
         assert len(words_rep) == len(phones_rep)
 
@@ -325,45 +333,28 @@ class CharsiuPreprocessor_en(CharsiuPreprocessor):
                 word_dur.append((dur, words_rep[count]))
 
         merged = []
-        for key, group in groupby(word_dur, lambda x: x[-1]):
-            group = list(group)
+        for key, _group in groupby(word_dur, lambda x: x[-1]):
+            group = list(_group)
             merged.append((group[0][0][0], group[-1][0][1], key))
         return merged
 
 
-class CharsiuAligner:
-    """Base class for alignment models."""
+class CharsiuForcedAligner:
+    """Forced alignment using Wav2Vec2 acoustic model."""
 
     def __init__(
         self,
-        lang: str = "en",
+        aligner: str,
+        sil_threshold: int = 4,
         sampling_rate: int = 16000,
         device: str | None = None,
-        recognizer=None,
-        processor=None,
         resolution: float = 0.01,
     ):
-        self.lang = lang
-        self.processor = processor or CharsiuPreprocessor_en()
         self.resolution = resolution
         self.sr = sampling_rate
-        self.recognizer = recognizer
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-    def _freeze_model(self):
-        self.aligner.eval().to(self.device)
-        if self.recognizer is not None:
-            self.recognizer.eval().to(self.device)
-
-    def align(self, audio, orig_sr, text):
-        raise NotImplementedError
-
-
-class CharsiuForcedAligner(CharsiuAligner):
-    """Forced alignment using Wav2Vec2 acoustic model."""
-
-    def __init__(self, aligner: str, sil_threshold: int = 4, **kwargs):
-        super().__init__(**kwargs)
+        self.processor = CharsiuPreprocessor()
         self.aligner = Wav2Vec2ForFrameClassification.from_pretrained(aligner)
 
         ensure_nltk_resource("punkt_tab")
@@ -371,13 +362,30 @@ class CharsiuForcedAligner(CharsiuAligner):
         self.sil_threshold = sil_threshold
         self.sil = "[SIL]"
         self.vowels_vocab = {
-            "AA", "AE", "AH", "AO", "AW", "AY",
-            "EH", "ER", "EY", "IH", "IY",
-            "OW", "OY", "UH", "UW",
+            "AA",
+            "AE",
+            "AH",
+            "AO",
+            "AW",
+            "AY",
+            "EH",
+            "ER",
+            "EY",
+            "IH",
+            "IY",
+            "OW",
+            "OY",
+            "UH",
+            "UW",
         }
         self._freeze_model()
 
-    def _merge_silence(self, aligned_phones: list[str], sil_mask: list[int]) -> list[str]:
+    def _freeze_model(self):
+        self.aligner.eval().to(self.device)
+
+    def _merge_silence(
+        self, aligned_phones: list[str], sil_mask: list[int]
+    ) -> list[str]:
         """Merge silence and non-silence intervals."""
         result, count = [], 0
         for i in sil_mask:
@@ -393,8 +401,8 @@ class CharsiuForcedAligner(CharsiuAligner):
         """Compute silence mask based on posterior probabilities."""
         preds = np.argmax(cost, axis=-1)
         mask = []
-        for key, group in groupby(preds):
-            group = list(group)
+        for key, _group in groupby(preds):
+            group = list(_group)
             if key == self.processor.sil_idx and len(group) < self.sil_threshold:
                 mask.extend([-1] * len(group))
             else:
@@ -409,7 +417,9 @@ class CharsiuForcedAligner(CharsiuAligner):
     ) -> dict:
         """Convert alignments to MFA (Montreal Forced Aligner) format."""
         vowels = [ph for ph in chain.from_iterable(orig_phones) if ph[-1].isdigit()]
-        alignment = {"tiers": {"phones": {"entries": []}, "words": {"entries": []}}}
+        alignment: Dict[str, Any] = {
+            "tiers": {"phones": {"entries": []}, "words": {"entries": []}}
+        }
 
         for start, end, word in pred_words:
             if word not in ("[PAD]", "[UNK]", self.sil):
@@ -470,11 +480,13 @@ class CharsiuForcedAligner(CharsiuAligner):
             raise RuntimeError("No speech detected! Please check the audio file.")
 
         aligned_phone_ids = forced_align(cost[nonsil_idx, :], phone_ids[1:-1])
-        aligned_phones = [self.processor.mapping_id2phone(phone_ids[1:-1][i])
-                          for i in aligned_phone_ids]
+        aligned_phones = [
+            self.processor.mapping_id2phone(phone_ids[1:-1][i])
+            for i in aligned_phone_ids
+        ]
 
-        pred_phones = self._merge_silence(aligned_phones, sil_mask)
-        pred_phones = seq2duration(pred_phones, resolution=self.resolution)
+        _pred_phones = self._merge_silence(aligned_phones, sil_mask)
+        pred_phones = seq2duration(_pred_phones, resolution=self.resolution)
         pred_words = self.processor.align_words(pred_phones, phones, words)
 
         return self.to_mfa_format(pred_phones, pred_words, phones)
