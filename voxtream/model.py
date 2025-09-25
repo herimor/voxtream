@@ -1,16 +1,17 @@
 # The code is partially borrowed from https://github.com/SesameAILabs/csm/blob/main/models.py
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 
-from dataclasses import dataclass
-from utils.model import (
+from voxtream.utils.model import (
     MODEL_POOL,
+    create_mask,
+    get_mask,
+    index_causal_mask,
     prepare_transformer,
     sample_token,
-    create_mask,
-    index_causal_mask,
-    get_mask
 )
 
 
@@ -35,27 +36,66 @@ class Model(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
-        
-        self.phone_former, phone_former_dim = prepare_transformer(MODEL_POOL[config.phone_former])
-        self.temp_former, temp_former_dim = prepare_transformer(MODEL_POOL[config.temp_former])
-        self.dep_former, dep_former_dim = prepare_transformer(MODEL_POOL[config.dep_former])
-        
+
+        self.phone_former, phone_former_dim = prepare_transformer(
+            MODEL_POOL[config.phone_former]
+        )
+        self.temp_former, temp_former_dim = prepare_transformer(
+            MODEL_POOL[config.temp_former]
+        )
+        self.dep_former, dep_former_dim = prepare_transformer(
+            MODEL_POOL[config.dep_former]
+        )
+
         self.phone_embeddings = nn.Embedding(config.phone_vocab_size, phone_former_dim)
-        self.audio_embeddings = nn.Embedding(config.audio_vocab_size * config.num_codebooks, config.embedding_dim)
+        self.audio_embeddings = nn.Embedding(
+            config.audio_vocab_size * config.num_codebooks, config.embedding_dim
+        )
 
-        self.spk_emb_proj = nn.Linear(config.spk_embedding_dim, temp_former_dim, bias=False)
-        self.sem_head = nn.Linear(temp_former_dim, config.audio_vocab_size * config.num_phone_states, bias=False)
-        self.audio_head = nn.Parameter(torch.empty(config.num_codebooks - 1, dep_former_dim, config.audio_vocab_size))
+        self.spk_emb_proj = nn.Linear(
+            config.spk_embedding_dim, temp_former_dim, bias=False
+        )
+        self.sem_head = nn.Linear(
+            temp_former_dim,
+            config.audio_vocab_size * config.num_phone_states,
+            bias=False,
+        )
+        self.audio_head = nn.Parameter(
+            torch.empty(
+                config.num_codebooks - 1, dep_former_dim, config.audio_vocab_size
+            )
+        )
 
-        self.register_buffer('audio_shifts', (config.audio_vocab_size * torch.arange(config.num_codebooks)).view(1, -1, 1), persistent=False)
-        self.register_buffer('phone_former_mask', create_mask(self.phone_former.max_seq_len, config.phone_window_size, config.look_ahead), persistent=False)
-        self.register_buffer('temp_former_causal_mask', create_mask(self.temp_former.max_seq_len, config.audio_window_size), persistent=False)
-        self.register_buffer('dep_former_causal_mask', create_mask(self.config.num_codebooks, config.audio_window_size), persistent=False)
+        self.register_buffer(
+            "audio_shifts",
+            (config.audio_vocab_size * torch.arange(config.num_codebooks)).view(
+                1, -1, 1
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "phone_former_mask",
+            create_mask(
+                self.phone_former.max_seq_len,
+                config.phone_window_size,
+                config.look_ahead,
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "temp_former_causal_mask",
+            create_mask(self.temp_former.max_seq_len, config.audio_window_size),
+            persistent=False,
+        )
+        self.register_buffer(
+            "dep_former_causal_mask",
+            create_mask(self.config.num_codebooks, config.audio_window_size),
+            persistent=False,
+        )
 
     @staticmethod
     def reorder_phone_emb(
-        phone_emb: torch.Tensor,
-        phoneme_embedding_indices: torch.Tensor
+        phone_emb: torch.Tensor, phoneme_embedding_indices: torch.Tensor
     ) -> torch.Tensor:
         """
         Args:
@@ -78,13 +118,15 @@ class Model(nn.Module):
 
         with device:
             self.temp_former.setup_caches(max_batch_size, dtype)
-            self.dep_former.setup_caches(max_batch_size, dtype, decoder_max_seq_len=self.config.num_codebooks)
-    
+            self.dep_former.setup_caches(
+                max_batch_size, dtype, decoder_max_seq_len=self.config.num_codebooks
+            )
+
     def extract_phoneme_embeddings(
         self,
         phone_tokens: torch.Tensor,
         input_pos: torch.Tensor = None,
-        phoneme_embedding_indices: torch.Tensor = None
+        phoneme_embedding_indices: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -97,9 +139,11 @@ class Model(nn.Module):
         emb = self.phone_embeddings(phone_tokens)
         if input_pos is None:
             input_pos = torch.arange(0, emb.shape[1]).unsqueeze(0).long().to(emb.device)
-        
+
         mask = get_mask(self.phone_former_mask, input_pos).to(emb.device)
-        phone_emb = self.phone_former(emb, input_pos=input_pos, mask=mask).to(dtype=emb.dtype)
+        phone_emb = self.phone_former(emb, input_pos=input_pos, mask=mask).to(
+            dtype=emb.dtype
+        )
 
         if phoneme_embedding_indices is not None:
             phone_emb = self.reorder_phone_emb(phone_emb, phoneme_embedding_indices)
@@ -113,7 +157,7 @@ class Model(nn.Module):
         input_pos: torch.Tensor,
         spk_embeddings: torch.Tensor = None,
         temperature: float = 0.9,
-        topk: int = 5
+        topk: int = 5,
     ) -> torch.Tensor:
         """
         Args:
@@ -126,16 +170,22 @@ class Model(nn.Module):
             frame: (batch_size, num_codebooks)
             pred_shift: (batch_size)
         """
-        assert self.temp_former.caches_are_enabled(), "temp_former caches are not enabled"
-        
+        assert (
+            self.temp_former.caches_are_enabled()
+        ), "temp_former caches are not enabled"
+
         audio_emb = self._embed_audio_tokens(audio_tokens)
         dtype = audio_emb.dtype
-        
+
         emb = torch.cat([phone_emb.unsqueeze(1), audio_emb], dim=1)
         h = emb.sum(dim=1, dtype=dtype)
 
-        curr_temp_former_mask = index_causal_mask(self.temp_former_causal_mask, input_pos)
-        h = self.temp_former(h, input_pos=input_pos, mask=curr_temp_former_mask).to(dtype=dtype)
+        curr_temp_former_mask = index_causal_mask(
+            self.temp_former_causal_mask, input_pos
+        )
+        h = self.temp_former(h, input_pos=input_pos, mask=curr_temp_former_mask).to(
+            dtype=dtype
+        )
 
         last_h = h[:, -1, :]
         c0_logits = self.sem_head(last_h)
@@ -152,13 +202,21 @@ class Model(nn.Module):
 
         curr_h = torch.cat([last_h.unsqueeze(1), c0_embed], dim=1)
         frame = c0_sample.clone()
-        curr_pos = torch.arange(0, curr_h.size(1), device=curr_h.device).unsqueeze(0).repeat(curr_h.size(0), 1)
+        curr_pos = (
+            torch.arange(0, curr_h.size(1), device=curr_h.device)
+            .unsqueeze(0)
+            .repeat(curr_h.size(0), 1)
+        )
 
         # Depth transfomer caches must be reset every frame.
         self.dep_former.reset_caches()
         for i in range(1, self.config.num_codebooks):
-            curr_dep_former_mask = index_causal_mask(self.dep_former_causal_mask, curr_pos)
-            dep_former_h = self.dep_former(curr_h, input_pos=curr_pos, mask=curr_dep_former_mask).to(dtype=dtype)
+            curr_dep_former_mask = index_causal_mask(
+                self.dep_former_causal_mask, curr_pos
+            )
+            dep_former_h = self.dep_former(
+                curr_h, input_pos=curr_pos, mask=curr_dep_former_mask
+            ).to(dtype=dtype)
             ci_logits = torch.mm(dep_former_h[:, -1, :], self.audio_head[i - 1])
             ci_sample = sample_token(ci_logits, topk, temperature)
 
@@ -169,13 +227,13 @@ class Model(nn.Module):
             curr_pos = curr_pos[:, -1:] + 1
 
         return frame, pred_shift
-    
+
     def forward(
         self,
         phone_tokens: torch.Tensor,
         phoneme_embedding_indices: torch.Tensor,
         audio_tokens: torch.Tensor,
-        spk_embeddings: torch.Tensor = None
+        spk_embeddings: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -189,18 +247,26 @@ class Model(nn.Module):
             audio_logits: (batch_size, dim, num_codebooks - 1, audio_seq_len)
             rand_idx: (amortized_seq_len,)
         """
-        phone_emb = self.extract_phoneme_embeddings(phone_tokens, phoneme_embedding_indices=phoneme_embedding_indices)
+        phone_emb = self.extract_phoneme_embeddings(
+            phone_tokens, phoneme_embedding_indices=phoneme_embedding_indices
+        )
         audio_emb = self._embed_audio_tokens(audio_tokens)
 
         # exclude last pad audio token
         emb = torch.cat([phone_emb.unsqueeze(1), audio_emb[:, :, :-1]], dim=1)
         emb = emb.sum(dim=1, dtype=phone_emb.dtype)
 
-        input_pos = torch.arange(0, emb.shape[1]).unsqueeze(0).long().to(audio_emb.device)
-        curr_temp_former_mask = get_mask(self.temp_former_causal_mask, input_pos).to(emb.device)
-        
-        h = self.temp_former(emb, input_pos=input_pos, mask=curr_temp_former_mask).to(emb.dtype)
-        
+        input_pos = (
+            torch.arange(0, emb.shape[1]).unsqueeze(0).long().to(audio_emb.device)
+        )
+        curr_temp_former_mask = get_mask(self.temp_former_causal_mask, input_pos).to(
+            emb.device
+        )
+
+        h = self.temp_former(emb, input_pos=input_pos, mask=curr_temp_former_mask).to(
+            emb.dtype
+        )
+
         sem_logits = self.sem_head(h).permute(0, 2, 1)
 
         # exclude first pad audio token
@@ -212,28 +278,38 @@ class Model(nn.Module):
             h += spk_embeddings
 
         h = torch.cat([h.unsqueeze(1), audio_emb[:, :-1]], dim=1)
-        
+
         # Depth transformer amortization.
         # See Compute amortization in https://www.sesame.com/research/crossing_the_uncanny_valley_of_voice
         bs = h.shape[0]
         h = h.permute((0, 2, 1, 3))
-        rand_idx = torch.randperm(
-            h.shape[1],
-            device=h.device
-        )[:int(h.shape[1] // self.config.amortization_divisor)].sort()[0]
+        rand_idx = torch.randperm(h.shape[1], device=h.device)[
+            : int(h.shape[1] // self.config.amortization_divisor)
+        ].sort()[0]
         h = h[:, rand_idx]
         h = h.reshape((bs * len(rand_idx), self.config.num_codebooks, -1))
-        
-        input_pos = torch.arange(0, self.config.num_codebooks).unsqueeze(0).long().to(audio_emb.device)
-        curr_dep_former_causal_mask = get_mask(self.dep_former_causal_mask, input_pos).to(audio_emb.device)
-        
-        dep_former_h = self.dep_former(h, input_pos=input_pos, mask=curr_dep_former_causal_mask).to(h.dtype)
-        
+
+        input_pos = (
+            torch.arange(0, self.config.num_codebooks)
+            .unsqueeze(0)
+            .long()
+            .to(audio_emb.device)
+        )
+        curr_dep_former_causal_mask = get_mask(
+            self.dep_former_causal_mask, input_pos
+        ).to(audio_emb.device)
+
+        dep_former_h = self.dep_former(
+            h, input_pos=input_pos, mask=curr_dep_former_causal_mask
+        ).to(h.dtype)
+
         # remove prediction for the first codebook
         dep_former_h = dep_former_h[:, 1:]
 
         # Head
-        dep_former_h = dep_former_h.reshape((bs, len(rand_idx), self.config.num_codebooks - 1, -1))
+        dep_former_h = dep_former_h.reshape(
+            (bs, len(rand_idx), self.config.num_codebooks - 1, -1)
+        )
 
         audio_logits = []
         for i in range(self.config.num_codebooks - 1):

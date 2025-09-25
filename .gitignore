@@ -4,3 +4,5 @@ __pycache__/
 assets/audio/*.npy
 assets/benchmark/*.npy
 experiments/
+dist/
+*.egg-info/
