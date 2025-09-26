@@ -30,7 +30,6 @@ class SpeechGeneratorConfig:
     temperature: float
     topk: int
     max_audio_length_ms: int
-    device: str
     model_repo: str
     model_name: str
     model_config_name: str
@@ -55,6 +54,7 @@ class SpeechGeneratorConfig:
 class SpeechGenerator:
     def __init__(self, config: SpeechGeneratorConfig, compile: bool = False):
         self.config = config
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Model
         model, phone_to_token = self.get_model(config)
@@ -95,7 +95,7 @@ class SpeechGenerator:
         state_dict = load_file(model_weight_path)
         model.load_state_dict(state_dict)
 
-        model = model.eval().half().to(config.device)
+        model = model.eval().half().to(self.device)
         model.setup_caches(max_batch_size=1, dtype=torch.float16)
 
         return model, phone_to_token
@@ -104,7 +104,7 @@ class SpeechGenerator:
         mimi_weight = hf_hub_download(config.mimi_repo, config.mimi_name)
         mimi = (
             loaders.get_mimi(
-                filename=mimi_weight, device=config.device, num_codebooks=num_codebooks
+                filename=mimi_weight, device=self.device, num_codebooks=num_codebooks
             )
             .eval()
             .half()
@@ -123,7 +123,7 @@ class SpeechGenerator:
                 trust_repo=True,
                 verbose=False,
             )
-            .to(config.device)
+            .to(self.device)
             .half()
         )
         model.spec.float()
@@ -139,17 +139,15 @@ class SpeechGenerator:
 
         with (
             torch.no_grad(),
-            torch.autocast(device_type=self.config.device, dtype=torch.float16),
+            torch.autocast(device_type=self.device, dtype=torch.float16),
         ):
-            mimi_codes = self.mimi.encode(
-                waveform.unsqueeze(0).to(self.config.device).half()
-            )
+            mimi_codes = self.mimi.encode(waveform.unsqueeze(0).to(self.device).half())
 
         padded_tokens = torch.full(
             (1, mimi_codes.shape[1], mimi_codes.shape[2] + 1),  # [bs, cb, time]
             fill_value=self.config.mimi_vocab_size,
             dtype=torch.int64,
-            device=self.config.device,
+            device=self.device,
         )
 
         padded_tokens[:, 0, 1:] = mimi_codes[:, 0]
@@ -168,9 +166,9 @@ class SpeechGenerator:
 
         with (
             torch.no_grad(),
-            torch.autocast(device_type=self.config.device, dtype=torch.float16),
+            torch.autocast(device_type=self.device, dtype=torch.float16),
         ):
-            spk_embedding = self.spk_enc(waveform.to(self.config.device).half())
+            spk_embedding = self.spk_enc(waveform.to(self.device).half())
 
         # L2-normalization
         spk_embedding /= spk_embedding.norm(keepdim=True)
@@ -191,17 +189,15 @@ class SpeechGenerator:
         prompt_path = prompt_audio_path.parent / f"{prompt_audio_path.stem}.prompt.npy"
         if prompt_path.exists():
             prompt_data = np.load(prompt_path, allow_pickle=True).item()
-            mimi_codes = torch.from_numpy(prompt_data["mimi_codes"]).to(
-                self.config.device
-            )
+            mimi_codes = torch.from_numpy(prompt_data["mimi_codes"]).to(self.device)
             spk_embedding = torch.from_numpy(prompt_data["spk_embedding"]).to(
-                self.config.device
+                self.device
             )
             prompt_phone_tokens = torch.from_numpy(prompt_data["phone_tokens"]).to(
-                self.config.device
+                self.device
             )
             phone_emb_indices = torch.from_numpy(prompt_data["phone_emb_indices"]).to(
-                self.config.device
+                self.device
             )
         else:
             waveform, orig_sr = torchaudio.load(prompt_audio_path)
@@ -232,7 +228,7 @@ class SpeechGenerator:
                     np.concatenate([[self.config.bos_token], prompt_phone_tokens]),
                     axis=0,
                 ),
-            ).to(dtype=torch.int64, device=self.config.device)
+            ).to(dtype=torch.int64, device=self.device)
             phone_emb_indices = torch.from_numpy(
                 np.expand_dims(
                     np.concatenate(
@@ -243,7 +239,7 @@ class SpeechGenerator:
                     ),
                     axis=0,
                 ),
-            ).to(dtype=torch.int64, device=self.config.device)
+            ).to(dtype=torch.int64, device=self.device)
 
             if self.config.cache_prompt:
                 np.save(
@@ -267,9 +263,7 @@ class SpeechGenerator:
         phone_tokens = torch.cat(
             [
                 prompt_phone_tokens,
-                torch.tensor(
-                    [phonemes_to_gen], device=self.config.device, dtype=torch.long
-                ),
+                torch.tensor([phonemes_to_gen], device=self.device, dtype=torch.long),
             ],
             dim=1,
         )
@@ -296,7 +290,7 @@ class SpeechGenerator:
             phonemes_to_gen.extend(self.text_to_phone_tokens(text_chunk))
 
         phonemes_to_gen = torch.tensor(
-            [phonemes_to_gen], device=self.config.device, dtype=torch.long
+            [phonemes_to_gen], device=self.device, dtype=torch.long
         )
         phone_tokens = torch.cat([phone_tokens, phonemes_to_gen], dim=1)
         phone_emb = self.model.extract_phoneme_embeddings(phone_tokens)
@@ -396,10 +390,7 @@ class SpeechGenerator:
 
         max_seq_len = int(self.config.max_audio_length_ms / self.config.mimi_frame_ms)
         curr_pos = (
-            torch.arange(0, mimi_codes.size(2))
-            .unsqueeze(0)
-            .long()
-            .to(self.config.device)
+            torch.arange(0, mimi_codes.size(2)).unsqueeze(0).long().to(self.device)
         )
 
         sem_code: torch.Tensor = None

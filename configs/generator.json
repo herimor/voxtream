@@ -9,7 +9,6 @@
     "temperature": 0.9,
     "topk": 5,
     "max_audio_length_ms": 60000,
-    "device": "cuda",
     "model_repo": "herimor/voxtream",
     "model_name": "model.safetensors",
     "model_config_name": "config.json",

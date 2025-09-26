@@ -7,14 +7,14 @@ license-files = ["LICENSE"]
 
 [project]
 name = "voxtream"
-version = "0.1.0"
+version = "0.1.2"
 description = "Full-Stream Zero-shot TTS model with Extremely Low Latency"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
   { name = "Nikita Torgashov", email = "torgaschov.nikita@gmail.com" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 keywords = [
   "text-to-speech",
   "streaming",
@@ -28,7 +28,6 @@ classifiers = [
   "Topic :: Multimedia :: Sound/Audio",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.11",
 ]
 
 # install_requires (from requirements.txt)
@@ -37,17 +36,17 @@ dependencies = [
   "torchaudio==2.4.0",
   "torchtune==0.4.0",
   "torchao==0.9.0",
-  "lightning==2.4.0",
   "moshi==0.2.2",
+  "transformers==4.50.0",
   "huggingface_hub==0.28.1",
   "g2p-en==2.1.0",
   "librosa==0.11.0",
   "soundfile==0.13.1",
   "inflect==7.5.0",
   "nltk==3.9.1",
-  "hydra-core==1.3.2",
-  "tensorboard==2.19.0",
-  "transformers==4.50.0"
+  "gradio==4.44.1",
+  "gradio_client==1.3.0",
+  "pydantic==2.10.6"
 ]
 
 [project.optional-dependencies]
@@ -60,6 +59,7 @@ Source = "https://github.com/herimor/voxtream"
 
 [project.scripts]
 voxtream = "voxtream.run:main"
+voxtream-app = "voxtream.app:main"
 voxtream-benchmark = "voxtream.benchmark:main"
 
 [tool.setuptools.packages.find]

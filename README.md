@@ -14,6 +14,8 @@ We present VoXtream, a fully autoregressive, zero-shot streaming text-to-speech 
 - **Speed**: Works **5x** times faster than real-time and achieves **102 ms** first packet latency on GPU.
 - **Quality and efficiency**: With only 9k hours of training data, it matches or surpasses the quality and intelligibility of larger models or models trained on large datasets.
 
+Try [VoXtream ⚡](https://huggingface.co/spaces/herimor/voxtream) in your browser on HuggingFace 🤗 spaces.
+
 ## Installation
 
 ```bash
@@ -32,7 +34,7 @@ voxtream \
     --text "In general, however, some method is then needed to evaluate each approximation." \
     --output "output_stream.wav"
 ```
-* Note: Initial run may take some additional time to download model weights.
+* Note: The VoXtream requires around 2GB of VRAM. Initial run may take some additional time to download model weights.
 
 #### Full streaming
 ```bash
@@ -84,6 +86,12 @@ audio_frames = [audio_frame for audio_frame, _ in speech_stream]
 sf.write('full_stream.wav', np.concatenate(audio_frames), config.mimi_sr)
 ```
 
+### Gradio demo
+
+```bash
+voxtream-app
+```
+
 ## Training
 
 - Build the Docker container. If you have another version of Docker compose installed use `docker compose -f ...` instead.
@@ -113,7 +121,7 @@ To evaluate model's real time factor (RTF) and First packet latency (FPL) run `v
 
 - [x] Add a neural phoneme aligner. Remove MFA dependency
 - [x] Add PyPI package
-- [ ] Gradio demo
+- [x] Gradio demo
 - [ ] HuggingFace Spaces demo
 - [ ] Evaluation scripts
 
