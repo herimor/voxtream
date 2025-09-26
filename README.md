@@ -122,7 +122,7 @@ To evaluate model's real time factor (RTF) and First packet latency (FPL) run `v
 - [x] Add a neural phoneme aligner. Remove MFA dependency
 - [x] Add PyPI package
 - [x] Gradio demo
-- [ ] HuggingFace Spaces demo
+- [x] HuggingFace Spaces demo
 - [ ] Evaluation scripts
 
 ## License
