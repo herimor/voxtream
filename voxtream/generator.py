@@ -201,6 +201,9 @@ class SpeechGenerator:
             )
         else:
             waveform, orig_sr = torchaudio.load(prompt_audio_path)
+            if waveform.shape[0] != 1:
+                # Convert to mono
+                waveform = waveform.mean(dim=0, keepdim=True)
 
             # 1. Extract mimi codes
             mimi_codes = self.encode_audio_prompt(waveform, orig_sr)
