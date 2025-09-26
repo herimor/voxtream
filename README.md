@@ -22,7 +22,9 @@ pip install voxtream
 
 ## Usage
 
-### Output streaming
+### Command line
+
+#### Output streaming
 ```bash
 voxtream \
     --prompt-audio assets/audio/male.wav \
@@ -32,7 +34,7 @@ voxtream \
 ```
 * Note: Initial run may take some additional time to download model weights.
 
-### Full streaming
+#### Full streaming
 ```bash
 voxtream \
     --prompt-audio assets/audio/female.wav \
@@ -40,6 +42,46 @@ voxtream \
     --text "Staff do not always do enough to prevent violence." \
     --output "full_stream.wav" \
     --full-stream
+```
+
+### Python API
+
+```python
+import json
+from pathlib import Path
+
+import numpy as np
+import soundfile as sf
+
+from voxtream.utils.generator import set_seed, text_generator
+from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
+
+
+set_seed()
+with open('configs/generator.json') as f:
+    config = SpeechGeneratorConfig(**json.load(f))
+
+speech_generator = SpeechGenerator(config)
+
+# Output streaming
+speech_stream = speech_generator.generate_stream(
+    prompt_text="The liquor was first created as 'Brandy Milk', produced with milk, brandy and vanilla.",
+    prompt_audio_path=Path('assets/audio/male.wav'),
+    text="In general, however, some method is then needed to evaluate each approximation."
+)
+
+audio_frames = [audio_frame for audio_frame, _ in speech_stream]
+sf.write('output_stream.wav', np.concatenate(audio_frames), config.mimi_sr)
+
+# Full streaming
+speech_stream = speech_generator.generate_stream(
+    prompt_text="Betty Cooper helps Archie with cleaning a store room, when Reggie attacks her.",
+    prompt_audio_path=Path('assets/audio/female.wav'),
+    text=text_generator("Staff do not always do enough to prevent violence.")
+)
+
+audio_frames = [audio_frame for audio_frame, _ in speech_stream]
+sf.write('full_stream.wav', np.concatenate(audio_frames), config.mimi_sr)
 ```
 
 ## Training
