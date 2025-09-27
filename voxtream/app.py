@@ -66,18 +66,20 @@ def main():
                 prompt_audio = gr.Audio(
                     sources=["microphone", "upload"],
                     type="filepath",
-                    label="Prompt audio (3-5 sec of target voice)",
+                    label="Prompt audio (3-5 sec of target voice. Max 10 sec)",
                 )
                 prompt_text = gr.Textbox(
                     lines=3,
-                    label="Prompt transcript",
-                    placeholder="Text that matches the prompt audio (Required)",
+                    max_length=config.max_prompt_chars,
+                    label=f"Prompt transcript. Max characters: {config.max_prompt_chars} (Required)",
+                    placeholder="Text that matches the prompt audio",
                 )
 
             with gr.Column(scale=1, elem_id="right-col"):
                 target_text = gr.Textbox(
                     lines=3,
-                    label="Target text",
+                    max_length=config.max_phone_tokens,
+                    label=f"Target text. Max characters: {config.max_phone_tokens}",
                     placeholder="What you want the model to say",
                 )
                 output_audio = gr.Audio(

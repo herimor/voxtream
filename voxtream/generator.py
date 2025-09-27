@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,9 @@ class SpeechGeneratorConfig:
     phoneme_dict_name: str
     nltk_resource: str
     aligner: str
+    max_prompt_sec: int
+    max_prompt_chars: int
+    max_phone_tokens: int
     cache_prompt: bool
 
 
@@ -55,6 +59,7 @@ class SpeechGenerator:
     def __init__(self, config: SpeechGeneratorConfig, compile: bool = False):
         self.config = config
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.logger = logging.getLogger("voxtream")
 
         # Model
         model, phone_to_token = self.get_model(config)
@@ -203,7 +208,16 @@ class SpeechGenerator:
             waveform, orig_sr = torchaudio.load(prompt_audio_path)
             if waveform.shape[0] != 1:
                 # Convert to mono
+                self.logger.warning(
+                    f"Prompt audio has {waveform.shape[0]} channels; converting to mono by averaging."
+                )
                 waveform = waveform.mean(dim=0, keepdim=True)
+            if waveform.shape[1] > orig_sr * self.config.max_prompt_sec:
+                # Trim to max_prompt_sec seconds
+                self.logger.warning(
+                    f"Prompt audio is longer than {self.config.max_prompt_sec} seconds; trimming."
+                )
+                waveform = waveform[:, : orig_sr * self.config.max_prompt_sec]
 
             # 1. Extract mimi codes
             mimi_codes = self.encode_audio_prompt(waveform, orig_sr)
@@ -212,6 +226,12 @@ class SpeechGenerator:
 
             # 3. Align prompt text to audio
             # TODO: Add Whisper transcription if prompt_text is not provided
+            prompt_text = normalize_text(prompt_text)
+            if len(prompt_text) > self.config.max_prompt_chars:
+                self.logger.warning(
+                    f"Prompt text is longer than {self.config.max_prompt_chars} characters; trimming."
+                )
+                prompt_text = prompt_text[: self.config.max_prompt_chars]
             phoneme_alignment = self.aligner.align(
                 audio=waveform, orig_sr=orig_sr, text=prompt_text
             )
@@ -262,6 +282,12 @@ class SpeechGenerator:
     ) -> Tuple[torch.Tensor, torch.Tensor, int]:
         """Prepare phone embeddings for non-streaming mode."""
         phonemes_to_gen = self.text_to_phone_tokens(text)
+        max_len = self.config.max_phone_tokens - prompt_phone_tokens.shape[1]
+        if len(phonemes_to_gen) > max_len:
+            self.logger.warning(
+                f"Input text exceeds max_phone_tokens ({self.config.max_phone_tokens}); trimming."
+            )
+            phonemes_to_gen = phonemes_to_gen[:max_len]
         phonemes_to_gen.extend([self.config.sil_token, self.config.eos_token])
         phone_tokens = torch.cat(
             [
@@ -281,16 +307,25 @@ class SpeechGenerator:
         empty_text_stream: bool,
     ) -> Tuple[torch.Tensor, torch.Tensor, int, bool]:
         """Fetch next text chunk from generator and update phone tokens/embeddings."""
-        phonemes_to_gen = []
         try:
             text_chunk = next(text_gen)
         except StopIteration:
             empty_text_stream = True
 
+        phonemes_to_gen = []
         if empty_text_stream:
             phonemes_to_gen.extend([self.config.sil_token, self.config.eos_token])
         else:
             phonemes_to_gen.extend(self.text_to_phone_tokens(text_chunk))
+
+        max_len = self.config.max_phone_tokens - phone_tokens.shape[1]
+        if len(phonemes_to_gen) > max_len and not empty_text_stream:
+            self.logger.warning(
+                f"Input text stream is too long; trimming to fit max_phone_tokens ({self.config.max_phone_tokens})."
+            )
+            phonemes_to_gen = phonemes_to_gen[:max_len]
+            phonemes_to_gen.extend([self.config.sil_token, self.config.eos_token])
+            empty_text_stream = True
 
         phonemes_to_gen = torch.tensor(
             [phonemes_to_gen], device=self.device, dtype=torch.long
@@ -300,7 +335,7 @@ class SpeechGenerator:
 
         phone_seq_len = phone_emb.shape[1]
         if empty_text_stream:
-            phone_seq_len -= 2
+            phone_seq_len -= 2  # ignore <silence> and <EOS> tokens
 
         return phone_tokens, phone_emb, phone_seq_len, empty_text_stream
 

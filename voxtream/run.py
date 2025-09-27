@@ -15,20 +15,20 @@ def main():
         "-pa",
         "--prompt-audio",
         type=existing_file,
-        help="Path to the prompt audio file",
+        help="Path to the prompt audio file (3-5 sec of target voice. Max 10 sec).",
         default="assets/audio/male.wav",
     )
     parser.add_argument(
         "-pt",
         "--prompt-text",
         type=str,
-        help="Text transcription to the prompt audio",
+        help="Text transcription to the prompt audio (Max 250 characters).",
     )
     parser.add_argument(
         "-t",
         "--text",
         type=str,
-        help="Text to be synthesized",
+        help="Text to be synthesized (Max 1000 characters).",
     )
     parser.add_argument(
         "-o",
@@ -62,7 +62,7 @@ def main():
 
     audio_frames = [audio_frame for audio_frame, _ in speech_stream]
     sf.write(args.output, np.concatenate(audio_frames), config.mimi_sr)
-    print(f"Audio saved to {args.output}")
+    speech_generator.logger.info(f"Audio saved to {args.output}")
 
 
 if __name__ == "__main__":

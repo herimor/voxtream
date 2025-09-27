@@ -26,6 +26,9 @@
     "phoneme_dict_name": "phoneme_to_token.json",
     "nltk_resource": "taggers/averaged_perceptron_tagger_eng",
     "aligner": "charsiu/en_w2v2_fc_10ms",
+    "max_prompt_sec": 10,
+    "max_prompt_chars": 250,
+    "max_phone_tokens": 1000,
     "cache_prompt": false,
     "phoneme_index_map": {
         "0": [

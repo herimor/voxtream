@@ -7,7 +7,7 @@ license-files = ["LICENSE"]
 
 [project]
 name = "voxtream"
-version = "0.1.2"
+version = "0.1.4"
 description = "Full-Stream Zero-shot TTS model with Extremely Low Latency"
 readme = "README.md"
 license = { text = "MIT" }
