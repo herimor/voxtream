@@ -57,6 +57,10 @@
     </ul>
   </p>
 
+  <p style="font-size: 16px;">
+  Try <a href="https://huggingface.co/spaces/herimor/voxtream" target="_blank">VoXtream ⚡</a> in your browser on HuggingFace 🤗 spaces.
+  </p>
+
   <!-- architecture -->
   <img src="assets/img/architecture_v4.png"
      alt="Architecture"
