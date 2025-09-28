@@ -71,7 +71,7 @@ def main():
                 prompt_text = gr.Textbox(
                     lines=3,
                     max_length=config.max_prompt_chars,
-                    label=f"Prompt transcript. Max characters: {config.max_prompt_chars} (Required)",
+                    label=f"Prompt transcript (Required, max {config.max_prompt_chars} chars)",
                     placeholder="Text that matches the prompt audio",
                 )
 
@@ -79,7 +79,7 @@ def main():
                 target_text = gr.Textbox(
                     lines=3,
                     max_length=config.max_phone_tokens,
-                    label=f"Target text. Max characters: {config.max_phone_tokens}",
+                    label=f"Target text (Required, max {config.max_phone_tokens} chars)",
                     placeholder="What you want the model to say",
                 )
                 output_audio = gr.Audio(
@@ -91,19 +91,60 @@ def main():
         with gr.Row():
             clear_btn = gr.Button("Clear", elem_id="clear", variant="secondary")
             submit_btn = gr.Button("Submit", elem_id="submit", variant="primary")
+        
+        # Message box for validation errors
+        validation_msg = gr.Markdown("", visible=False)
 
-        # wire up actions
+        # --- Validation logic ---
+        def validate_inputs(audio, ptext, ttext):
+            if not audio:
+                return gr.update(visible=True, value="⚠️ Please provide a prompt audio."), gr.update(interactive=False)
+            if not ptext.strip():
+                return gr.update(visible=True, value="⚠️ Please provide a prompt transcript."), gr.update(interactive=False)
+            if not ttext.strip():
+                return gr.update(visible=True, value="⚠️ Please provide target text."), gr.update(interactive=False)
+            return gr.update(visible=False, value=""), gr.update(interactive=True)
+
+        # Live validation whenever inputs change
+        for inp in [prompt_audio, prompt_text, target_text]:
+            inp.change(
+                fn=validate_inputs,
+                inputs=[prompt_audio, prompt_text, target_text],
+                outputs=[validation_msg, submit_btn],
+            )
+
+        # --- Wire up actions ---
         submit_btn.click(
             fn=synthesize_fn,
             inputs=[prompt_audio, prompt_text, target_text],
             outputs=output_audio,
         )
 
-        # reset everything
         clear_btn.click(
-            fn=lambda: (None, "", "", None),
+            fn=lambda: (None, "", "", None, gr.update(visible=False, value=""), gr.update(interactive=False)),
             inputs=[],
-            outputs=[prompt_audio, prompt_text, target_text, output_audio],
+            outputs=[prompt_audio, prompt_text, target_text, output_audio, validation_msg, submit_btn],
+        )
+
+        # --- Add Examples ---
+        gr.Markdown("### Examples")
+        gr.Examples(
+            examples=[
+                [
+                    "assets/app/male.wav",
+                    "You could take the easy route or a situation that makes sense which a lot of you do",
+                    "Hey, how are you doing? I just uhm want to make sure everything is okay."
+                ],
+                [
+                    "assets/app/female.wav",
+                    "I would certainly anticipate some pushback whereas most people know if you followed my work.",
+                    "Hello, hello. Let's have a quick chat, uh, in an hour. I need to share something with you."
+                ],
+            ],
+            inputs=[prompt_audio, prompt_text, target_text],
+            outputs=output_audio,
+            fn=synthesize_fn,
+            cache_examples=True,
         )
 
     demo.launch()

@@ -6,3 +6,4 @@ assets/benchmark/*.npy
 experiments/
 dist/
 *.egg-info/
+gradio_cached_examples/
