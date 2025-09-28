@@ -8,6 +8,8 @@ import numpy as np
 from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
 from voxtream.utils.generator import existing_file
 
+MIN_CHUNK_SEC = 0.2
+FADE_OUT_SEC = 0.10
 CUSTOM_CSS = """
 /* overall width */
 .gradio-container {max-width: 1100px !important}
@@ -21,6 +23,27 @@ CUSTOM_CSS = """
 /* give audio a little breathing room */
 audio {outline: none;}
 """
+
+def float32_to_int16(audio_float32: np.ndarray) -> np.ndarray:
+    """
+    Convert float32 audio samples (-1.0 to 1.0) to int16 PCM samples.
+
+    Parameters:
+        audio_float32 (np.ndarray): Input float32 audio samples.
+
+    Returns:
+        np.ndarray: Output int16 audio samples.
+    """
+    if audio_float32.dtype != np.float32:
+        raise ValueError("Input must be a float32 numpy array")
+
+    # Clip to avoid overflow after scaling
+    audio_clipped = np.clip(audio_float32, -1.0, 1.0)
+
+    # Scale and convert
+    audio_int16 = (audio_clipped * 32767).astype(np.int16)
+
+    return audio_int16
 
 
 def main():
@@ -37,6 +60,7 @@ def main():
     with open(args.config) as f:
         config = SpeechGeneratorConfig(**json.load(f))
     speech_generator = SpeechGenerator(config)
+    CHUNK_SIZE = int(config.mimi_sr * MIN_CHUNK_SEC)
 
     def synthesize_fn(prompt_audio_path, prompt_text, target_text):
         if not prompt_audio_path or not target_text:
@@ -46,17 +70,30 @@ def main():
             prompt_audio_path=Path(prompt_audio_path),
             text=target_text,
         )
-        frames = [frame for frame, _ in stream]
-        if not frames:
-            return None
-        waveform = np.concatenate(frames).astype(np.float32)
 
-        # Fade out
-        fade_len_sec = 0.1
-        fade_out = np.linspace(1.0, 0.0, int(config.mimi_sr * fade_len_sec))
-        waveform[-int(config.mimi_sr * fade_len_sec) :] *= fade_out
+        buffer = []
+        buffer_len = 0
 
-        return (config.mimi_sr, waveform)
+        for frame, _ in stream:
+            buffer.append(frame)
+            buffer_len += frame.shape[0]
+
+            if buffer_len >= CHUNK_SIZE:
+                audio = np.concatenate(buffer)
+                yield (config.mimi_sr, float32_to_int16(audio))
+
+                # Reset buffer and length
+                buffer = []
+                buffer_len = 0
+
+        # Handle any remaining audio in the buffer
+        if buffer_len > 0:
+            final = np.concatenate(buffer)
+            nfade = min(int(config.mimi_sr * FADE_OUT_SEC), final.shape[0])
+            if nfade > 0:
+                fade = np.linspace(1.0, 0.0, nfade, dtype=np.float32)
+                final[-nfade:] *= fade
+            yield (config.mimi_sr, float32_to_int16(final))
 
     with gr.Blocks(css=CUSTOM_CSS, title="VoXtream") as demo:
         gr.Markdown("# VoXtream TTS demo")
@@ -83,9 +120,10 @@ def main():
                     placeholder="What you want the model to say",
                 )
                 output_audio = gr.Audio(
-                    type="numpy",
                     label="Synthesized audio",
                     interactive=False,
+                    streaming=True,
+                    autoplay=True,
                 )
 
         with gr.Row():
@@ -115,6 +153,11 @@ def main():
 
         # --- Wire up actions ---
         submit_btn.click(
+            fn=lambda a, p, t: None,  # clears the audio value
+            inputs=[prompt_audio, prompt_text, target_text],
+            outputs=output_audio,
+            show_progress="hidden",
+        ).then(
             fn=synthesize_fn,
             inputs=[prompt_audio, prompt_text, target_text],
             outputs=output_audio,
