@@ -19,7 +19,7 @@
   <div style="margin:1rem auto 2rem; font-size: 16px;">
     <div>
         <div>
-            <a href="https://www.kth.se/profile/nikitat">
+            <a href="https://herimor.github.io">
                 <span>Nikita Torgashov</span>
             </a>
             <a href="https://people.kth.se/~ghe">
