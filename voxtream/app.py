@@ -1,9 +1,11 @@
 import argparse
 import json
+import uuid
 from pathlib import Path
 
 import gradio as gr
 import numpy as np
+import soundfile as sf
 
 from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
 from voxtream.utils.generator import existing_file
@@ -23,6 +25,7 @@ CUSTOM_CSS = """
 /* give audio a little breathing room */
 audio {outline: none;}
 """
+
 
 def float32_to_int16(audio_float32: np.ndarray) -> np.ndarray:
     """
@@ -46,55 +49,12 @@ def float32_to_int16(audio_float32: np.ndarray) -> np.ndarray:
     return audio_int16
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-c",
-        "--config",
-        type=existing_file,
-        help="Path to the config file",
-        default="configs/generator.json",
-    )
-    args = parser.parse_args()
+def _clear_outputs():
+    # clears the player + hides file (download btn mirrors file via .change)
+    return None, gr.update(value=None, visible=False)
 
-    with open(args.config) as f:
-        config = SpeechGeneratorConfig(**json.load(f))
-    speech_generator = SpeechGenerator(config)
-    CHUNK_SIZE = int(config.mimi_sr * MIN_CHUNK_SEC)
 
-    def synthesize_fn(prompt_audio_path, prompt_text, target_text):
-        if not prompt_audio_path or not target_text:
-            return None
-        stream = speech_generator.generate_stream(
-            prompt_text=prompt_text,
-            prompt_audio_path=Path(prompt_audio_path),
-            text=target_text,
-        )
-
-        buffer = []
-        buffer_len = 0
-
-        for frame, _ in stream:
-            buffer.append(frame)
-            buffer_len += frame.shape[0]
-
-            if buffer_len >= CHUNK_SIZE:
-                audio = np.concatenate(buffer)
-                yield (config.mimi_sr, float32_to_int16(audio))
-
-                # Reset buffer and length
-                buffer = []
-                buffer_len = 0
-
-        # Handle any remaining audio in the buffer
-        if buffer_len > 0:
-            final = np.concatenate(buffer)
-            nfade = min(int(config.mimi_sr * FADE_OUT_SEC), final.shape[0])
-            if nfade > 0:
-                fade = np.linspace(1.0, 0.0, nfade, dtype=np.float32)
-                final[-nfade:] *= fade
-            yield (config.mimi_sr, float32_to_int16(final))
-
+def demo_app(config: SpeechGeneratorConfig, synthesize_fn):
     with gr.Blocks(css=CUSTOM_CSS, title="VoXtream") as demo:
         gr.Markdown("# VoXtream TTS demo")
 
@@ -124,23 +84,37 @@ def main():
                     interactive=False,
                     streaming=True,
                     autoplay=True,
+                    show_download_button=False,
+                    show_share_button=False,
+                )
+
+                # appears only when file is ready
+                download_btn = gr.DownloadButton(
+                    "Download audio",
+                    visible=False,
                 )
 
         with gr.Row():
             clear_btn = gr.Button("Clear", elem_id="clear", variant="secondary")
             submit_btn = gr.Button("Submit", elem_id="submit", variant="primary")
-        
+
         # Message box for validation errors
         validation_msg = gr.Markdown("", visible=False)
 
         # --- Validation logic ---
         def validate_inputs(audio, ptext, ttext):
             if not audio:
-                return gr.update(visible=True, value="⚠️ Please provide a prompt audio."), gr.update(interactive=False)
+                return gr.update(
+                    visible=True, value="⚠️ Please provide a prompt audio."
+                ), gr.update(interactive=False)
             if not ptext.strip():
-                return gr.update(visible=True, value="⚠️ Please provide a prompt transcript."), gr.update(interactive=False)
+                return gr.update(
+                    visible=True, value="⚠️ Please provide a prompt transcript."
+                ), gr.update(interactive=False)
             if not ttext.strip():
-                return gr.update(visible=True, value="⚠️ Please provide target text."), gr.update(interactive=False)
+                return gr.update(
+                    visible=True, value="⚠️ Please provide target text."
+                ), gr.update(interactive=False)
             return gr.update(visible=False, value=""), gr.update(interactive=True)
 
         # Live validation whenever inputs change
@@ -151,46 +125,139 @@ def main():
                 outputs=[validation_msg, submit_btn],
             )
 
-        # --- Wire up actions ---
+        # clear outputs before streaming
         submit_btn.click(
-            fn=lambda a, p, t: None,  # clears the audio value
+            fn=lambda a, p, t: (None, gr.update(value=None, visible=False)),
             inputs=[prompt_audio, prompt_text, target_text],
-            outputs=output_audio,
+            outputs=[output_audio, download_btn],
             show_progress="hidden",
         ).then(
             fn=synthesize_fn,
             inputs=[prompt_audio, prompt_text, target_text],
-            outputs=output_audio,
+            outputs=[output_audio, download_btn],
         )
 
         clear_btn.click(
-            fn=lambda: (None, "", "", None, gr.update(visible=False, value=""), gr.update(interactive=False)),
+            fn=lambda: (
+                None,
+                "",
+                "",  # inputs
+                None,  # output_audio
+                gr.update(value=None, visible=False),  # download_btn
+                gr.update(visible=False, value=""),  # validation_msg
+                gr.update(interactive=False),  # submit_btn
+            ),
             inputs=[],
-            outputs=[prompt_audio, prompt_text, target_text, output_audio, validation_msg, submit_btn],
+            outputs=[
+                prompt_audio,
+                prompt_text,
+                target_text,
+                output_audio,
+                download_btn,
+                validation_msg,
+                submit_btn,
+            ],
         )
 
         # --- Add Examples ---
         gr.Markdown("### Examples")
-        gr.Examples(
+        ex = gr.Examples(
             examples=[
                 [
                     "assets/app/male.wav",
                     "You could take the easy route or a situation that makes sense which a lot of you do",
-                    "Hey, how are you doing? I just uhm want to make sure everything is okay."
+                    "Hey, how are you doing? I just uhm want to make sure everything is okay.",
                 ],
                 [
                     "assets/app/female.wav",
                     "I would certainly anticipate some pushback whereas most people know if you followed my work.",
-                    "Hello, hello. Let's have a quick chat, uh, in an hour. I need to share something with you."
+                    "Hello, hello. Let's have a quick chat, uh, in an hour. I need to share something with you.",
                 ],
             ],
             inputs=[prompt_audio, prompt_text, target_text],
-            outputs=output_audio,
+            outputs=[output_audio, download_btn],
             fn=synthesize_fn,
-            cache_examples=True,
+            cache_examples=False,
+        )
+
+        ex.dataset.click(
+            fn=_clear_outputs,
+            inputs=[],
+            outputs=[output_audio, download_btn],
+            queue=False,
         )
 
     demo.launch()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=existing_file,
+        help="Path to the config file",
+        default="configs/generator.json",
+    )
+    args = parser.parse_args()
+
+    with open(args.config) as f:
+        config = SpeechGeneratorConfig(**json.load(f))
+    speech_generator = SpeechGenerator(config)
+    CHUNK_SIZE = int(config.mimi_sr * MIN_CHUNK_SEC)
+
+    def synthesize_fn(prompt_audio_path, prompt_text, target_text):
+        if not prompt_audio_path or not target_text:
+            return None, gr.update(value=None, visible=False)
+
+        stream = speech_generator.generate_stream(
+            prompt_text=prompt_text,
+            prompt_audio_path=Path(prompt_audio_path),
+            text=target_text,
+        )
+
+        buffer = []
+        buffer_len = 0
+        total_buffer = []
+
+        for frame, _ in stream:
+            buffer.append(frame)
+            total_buffer.append(frame)
+            buffer_len += frame.shape[0]
+
+            if buffer_len >= CHUNK_SIZE:
+                audio = np.concatenate(buffer)
+                yield (config.mimi_sr, float32_to_int16(audio)), None
+
+                # Reset buffer and length
+                buffer = []
+                buffer_len = 0
+
+        # Handle any remaining audio in the buffer
+        if buffer_len > 0:
+            final = np.concatenate(buffer)
+            nfade = min(int(config.mimi_sr * FADE_OUT_SEC), final.shape[0])
+            if nfade > 0:
+                fade = np.linspace(1.0, 0.0, nfade, dtype=np.float32)
+                final[-nfade:] *= fade
+            yield (config.mimi_sr, float32_to_int16(final)), None
+
+        # Save the full audio to a file for download
+        if len(total_buffer) > 0:
+            full_audio = np.concatenate(total_buffer)
+            nfade = min(int(config.mimi_sr * FADE_OUT_SEC), full_audio.shape[0])
+            if nfade > 0:
+                fade = np.linspace(1.0, 0.0, nfade, dtype=np.float32)
+                full_audio[-nfade:] *= fade
+
+            file_path = f"/tmp/voxtream_{uuid.uuid4().hex}.wav"
+            sf.write(file_path, float32_to_int16(full_audio), config.mimi_sr)
+
+            yield None, gr.update(value=file_path, visible=True)
+        else:
+            yield None, gr.update(value=None, visible=False)
+
+    demo_app(config, synthesize_fn)
 
 
 if __name__ == "__main__":
