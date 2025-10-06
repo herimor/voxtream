@@ -27,10 +27,12 @@ pip install voxtream
 * Prompt audio: a file containing 3-5 seconds of the target voice. The maximum supported length is 10 seconds (longer audio will be trimmed).
 * Prompt transcript: text that matches the prompt audio. The maximum supported length is 250 characters (longer text will be trimmed).
 * Text: What you want the model to say. The maximum supported length is 1000 characters (longer text will be trimmed).
-* **Notes**: 
-    * The VoXtream requires around 2GB of VRAM.
-    * Maximum generation length is limited to 1 minute.
-    * The initial run may take a bit longer to download model weights.
+
+**Notes**: 
+* The model was tested on Ubuntu 22.04 and CUDA 12.
+* The model requires around 2GB of VRAM.
+* Maximum generation length is limited to 1 minute.
+* The initial run may take a bit longer to download model weights.
 
 ### Command line
 
