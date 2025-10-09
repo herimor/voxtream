@@ -28,4 +28,4 @@ class LinearWarmupDecayScheduler(torch.optim.lr_scheduler.LRScheduler):
     def get_lr(self):
         step = self.last_epoch
         step = min(step, len(self.lrs) - 1)  # Prevent out-of-bounds
-        return [self.lrs[step] for _ in self.base_lrs]
+        return [float(self.lrs[step].item()) for _ in self.base_lrs]
