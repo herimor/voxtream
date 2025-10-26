@@ -422,9 +422,11 @@ class SpeechGenerator:
             phone_tokens, phone_emb, phone_seq_len = self.prepare_non_streaming_text(
                 text, prompt_phone_tokens
             )
+            empty_text_stream = True
         else:
             phone_emb, phone_seq_len = None, 0
             phone_tokens = prompt_phone_tokens
+            empty_text_stream = False
 
         max_seq_len = int(self.config.max_audio_length_ms / self.config.mimi_frame_ms)
         curr_pos = (
@@ -433,13 +435,12 @@ class SpeechGenerator:
 
         sem_code: torch.Tensor = None
         eos_idx = max_seq_len
-        empty_text_stream = False
 
         start_time = time.time()
         with self.mimi.streaming(batch_size=1):
             for idx in range(max_seq_len):
                 # Handle streaming input
-                if isinstance(text, Generator) and not empty_text_stream:
+                if not empty_text_stream:
                     phone_tokens, phone_emb, phone_seq_len, empty_text_stream = (
                         self.prepare_streaming_text(
                             text, phone_tokens, empty_text_stream
