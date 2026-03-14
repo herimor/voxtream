@@ -2,12 +2,16 @@
 
   <h1>VoXtream: Full-Stream Text-to-Speech with Extremely Low Latency</h1>
 
+  <p>
+    <b>🎤 Accepted for Oral Presentation at ICASSP 2026</b>
+  </p>
+
   <!-- badges -->
   <p>
     <a href="https://arxiv.org/pdf/2509.15969" target="_blank">
       <img src="https://img.shields.io/badge/arXiv-Paper-COLOR.svg" />
     </a>
-    <a href="https://github.com/herimor/voxtream" target="_blank">
+    <a href="https://github.com/herimor/voxtream/tree/voxtream" target="_blank">
       <img src="https://img.shields.io/badge/GitHub-Code-green" />
     </a>
     <a href="https://huggingface.co/herimor/voxtream" target="_blank">
@@ -210,10 +214,12 @@
     }
   </style>
 
-  <pre class="bibtex">@article{torgashov2025voxtream,
-  author    = {Torgashov, Nikita and Henter, Gustav Eje and Skantze, Gabriel},
-  title     = {Vo{X}tream: Full-Stream Text-to-Speech with Extremely Low Latency},
-  journal   = {arXiv:2509.15969},
-  year      = {2025}
+  <pre class="bibtex">@inproceedings{torgashov2026voxtream,
+  title={Vo{X}tream: Full-Stream Text-to-Speech with Extremely Low Latency},
+  author={Torgashov, Nikita and Henter, Gustav Eje and Skantze, Gabriel},
+  booktitle={Proc. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)},
+  year={2026},
+  note={to appear},
+  url={https://arxiv.org/abs/2509.15969}
 }</pre>
 </div>
