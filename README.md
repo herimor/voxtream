@@ -16,10 +16,15 @@ We present VoXtream, a fully autoregressive, zero-shot streaming text-to-speech 
 
 Try [VoXtream ⚡](https://huggingface.co/spaces/herimor/voxtream) in your browser on HuggingFace 🤗 spaces.
 
+## Updates
+
+- `2026/01`: VoXtream is accepted for an oral presentation at ICASSP 2026.
+- `2025/09`: We released VoXtream.
+
 ## Installation
 
 ```bash
-pip install voxtream
+pip install voxtream==0.1.5
 ```
 
 ## Usage
@@ -150,11 +155,13 @@ The model weights were trained on data licensed under the Creative Commons Attri
 
 ## Citation
 ```
-@article{torgashov2025voxtream,
-  author    = {Torgashov, Nikita and Henter, Gustav Eje and Skantze, Gabriel},
-  title     = {Vo{X}tream: Full-Stream Text-to-Speech with Extremely Low Latency},
-  journal   = {arXiv:2509.15969},
-  year      = {2025}
+@inproceedings{torgashov2026voxtream,
+  title={Vo{X}tream: Full-Stream Text-to-Speech with Extremely Low Latency},
+  author={Torgashov, Nikita and Henter, Gustav Eje and Skantze, Gabriel},
+  booktitle={Proc. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)},
+  year={2026},
+  note={to appear},
+  url={https://arxiv.org/abs/2509.15969}
 }
 ```
 
