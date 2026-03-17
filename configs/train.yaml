@@ -4,14 +4,17 @@ hydra:
   output_subdir: null
 
 exp_name: voxtream_train
-model_repo: herimor/voxtream
-dataset_repo: herimor/voxtream-train-9k
+model_repo: herimor/voxtream2
+dataset_repo: herimor/voxtream2-train
+dataset_base_dir: null
 dep_former_name: dep_former_csm.safetensors
+dep_former_weight_path: null
+model_weight_path: null
 
-batch_size: 32
-lr: 0.0005
+batch_size: 64
+lr: 0.0002
 initial_lr: 0.00001
-max_epochs: 9
+max_epochs: 10
 warmup_epochs: 1
 weight_decay: 0.01
 precision: bf16-mixed
@@ -24,44 +27,55 @@ logging_interval: step
 save_weights_only: true
 strategy: ddp
 compile_forward: true
+freeze_dep_former: true
 
 dataset:
   datasets:
     emilia:
-      audio_codes: mimi_codes_16cb.npy
+      audio_codes: mimi_codes.npy
       phoneme_sequence_map: phone_tokens.npy
       phoneme_embedding_indices: phone_emb_indices.npy
       semantic_label_shifts: sem_label_shifts.npy
       spk_templates: spk_templates.npy
+      punctuation: punctuation.npy
     hifitts2:
-      audio_codes: mimi_codes_16cb.npy
+      audio_codes: mimi_codes.npy
       phoneme_sequence_map: phone_tokens.npy
       phoneme_embedding_indices: phone_emb_indices.npy
       semantic_label_shifts: sem_label_shifts.npy
       spk_templates: spk_templates.npy
-  
+      punctuation: punctuation.npy
+
   audio_delay_frames: 1
   pad_len: 1
   semantic_label_pad: 2
   num_phones_per_frame: 2
   dtype: int64
+  cfg_prob: 0.1
+  prompt_length_sec:
+    - 3
+    - 10
+  mimi_tps: 12.5
   phoneme_index_map:
     "0": 2
     "1": 3
     "2": 2
     "3": 3
+    "4": 2
+    "5": 3
 
 model:
   phone_former: phone_former
   temp_former: temp_former
   dep_former: dep_former_csm
-  phone_vocab_size: 73
-  audio_vocab_size: 2049
+  phone_vocab_size: 125
+  audio_vocab_size: 2050
+  audio_pad_size: 0
   embedding_dim: 1024
   spk_embedding_dim: 192
-  num_codebooks: 12
-  num_phone_states: 4
+  num_codebooks: 16
+  num_phone_states: 6
   amortization_divisor: 16
-  look_ahead: 2
-  audio_window_size: 250
-  phone_window_size: 350
+  max_look_ahead: 5
+  audio_window_size: 625
+  phone_window_size: 625

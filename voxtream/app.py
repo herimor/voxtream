@@ -7,10 +7,15 @@ import gradio as gr
 import numpy as np
 import soundfile as sf
 
-from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
-from voxtream.utils.generator import existing_file
+from voxtream.config import SpeechGeneratorConfig
+from voxtream.generator import SpeechGenerator
+from voxtream.utils.generator import (
+    existing_file,
+    interpolate_speaking_rate_params,
+    text_generator,
+)
 
-MIN_CHUNK_SEC = 0.2
+MIN_CHUNK_SEC = 0.01
 FADE_OUT_SEC = 0.10
 CUSTOM_CSS = """
 /* overall width */
@@ -51,26 +56,31 @@ def float32_to_int16(audio_float32: np.ndarray) -> np.ndarray:
 
 def _clear_outputs():
     # clears the player + hides file (download btn mirrors file via .change)
-    return None, gr.update(value=None, visible=False)
+    return gr.update(value=None), gr.update(value=None, visible=False)
 
 
-def demo_app(config: SpeechGeneratorConfig, synthesize_fn):
-    with gr.Blocks(css=CUSTOM_CSS, title="VoXtream") as demo:
-        gr.Markdown("# VoXtream TTS demo")
+def demo_app(config: SpeechGeneratorConfig, demo_examples, synthesize_fn):
+    with gr.Blocks(css=CUSTOM_CSS, title="VoXtream2") as demo:
+        gr.Markdown("# VoXtream2 TTS demo")
+        gr.Markdown(
+            "⚠️ First 3-5 runs may have higher latency due to model loading and warmup."
+        )
 
         with gr.Row(equal_height=True, elem_id="cols"):
             with gr.Column(scale=1, elem_id="left-col"):
                 prompt_audio = gr.Audio(
                     sources=["microphone", "upload"],
                     type="filepath",
-                    label="Prompt audio (3-5 sec of target voice. Max 10 sec)",
+                    label=f"Prompt audio (3-10 sec of target voice. Max {config.max_prompt_sec} sec)",
                 )
-                prompt_text = gr.Textbox(
-                    lines=3,
-                    max_length=config.max_prompt_chars,
-                    label=f"Prompt transcript (Required, max {config.max_prompt_chars} chars)",
-                    placeholder="Text that matches the prompt audio",
-                )
+                with gr.Accordion("Advanced options", open=False):
+                    prompt_enhancement = gr.Checkbox(
+                        label="Prompt enhancement", value=True
+                    )
+                    voice_activity_detection = gr.Checkbox(
+                        label="Voice activity detection", value=True
+                    )
+                    streaming_input = gr.Checkbox(label="Streaming input", value=False)
 
             with gr.Column(scale=1, elem_id="right-col"):
                 target_text = gr.Textbox(
@@ -79,6 +89,21 @@ def demo_app(config: SpeechGeneratorConfig, synthesize_fn):
                     label=f"Target text (Required, max {config.max_phone_tokens} chars)",
                     placeholder="What you want the model to say",
                 )
+                speaking_rate_control = gr.Slider(
+                    minimum=1,
+                    maximum=7,
+                    step=0.1,
+                    value=4,
+                    label="Speaking rate (syllables per second)",
+                )
+                enable_speaking_rate = gr.Checkbox(
+                    label="Use speaking rate control", value=True
+                )
+                enable_speaking_rate.change(
+                    fn=lambda enabled: gr.update(interactive=enabled),
+                    inputs=enable_speaking_rate,
+                    outputs=speaking_rate_control,
+                )
                 output_audio = gr.Audio(
                     label="Synthesized audio",
                     interactive=False,
@@ -86,6 +111,7 @@ def demo_app(config: SpeechGeneratorConfig, synthesize_fn):
                     autoplay=True,
                     show_download_button=False,
                     show_share_button=False,
+                    visible=False,
                 )
 
                 # appears only when file is ready
@@ -96,20 +122,18 @@ def demo_app(config: SpeechGeneratorConfig, synthesize_fn):
 
         with gr.Row():
             clear_btn = gr.Button("Clear", elem_id="clear", variant="secondary")
-            submit_btn = gr.Button("Submit", elem_id="submit", variant="primary")
+            submit_btn = gr.Button(
+                "Submit", elem_id="submit", variant="primary", interactive=False
+            )
 
         # Message box for validation errors
         validation_msg = gr.Markdown("", visible=False)
 
         # --- Validation logic ---
-        def validate_inputs(audio, ptext, ttext):
+        def validate_inputs(audio, ttext):
             if not audio:
                 return gr.update(
                     visible=True, value="⚠️ Please provide a prompt audio."
-                ), gr.update(interactive=False)
-            if not ptext.strip():
-                return gr.update(
-                    visible=True, value="⚠️ Please provide a prompt transcript."
                 ), gr.update(interactive=False)
             if not ttext.strip():
                 return gr.update(
@@ -118,31 +142,41 @@ def demo_app(config: SpeechGeneratorConfig, synthesize_fn):
             return gr.update(visible=False, value=""), gr.update(interactive=True)
 
         # Live validation whenever inputs change
-        for inp in [prompt_audio, prompt_text, target_text]:
+        for inp in [prompt_audio, target_text]:
             inp.change(
                 fn=validate_inputs,
-                inputs=[prompt_audio, prompt_text, target_text],
+                inputs=[prompt_audio, target_text],
                 outputs=[validation_msg, submit_btn],
             )
 
         # clear outputs before streaming
         submit_btn.click(
-            fn=lambda a, p, t: (None, gr.update(value=None, visible=False)),
-            inputs=[prompt_audio, prompt_text, target_text],
+            fn=lambda a, t: (
+                gr.update(value=None, visible=True),
+                gr.update(value=None, visible=False),
+            ),
+            inputs=[prompt_audio, target_text],
             outputs=[output_audio, download_btn],
             show_progress="hidden",
         ).then(
             fn=synthesize_fn,
-            inputs=[prompt_audio, prompt_text, target_text],
+            inputs=[
+                prompt_audio,
+                target_text,
+                prompt_enhancement,
+                voice_activity_detection,
+                streaming_input,
+                speaking_rate_control,
+                enable_speaking_rate,
+            ],
             outputs=[output_audio, download_btn],
         )
 
         clear_btn.click(
             fn=lambda: (
-                None,
-                "",
-                "",  # inputs
-                None,  # output_audio
+                gr.update(value=None),
+                gr.update(value=""),
+                gr.update(value=None, visible=False),  # output_audio
                 gr.update(value=None, visible=False),  # download_btn
                 gr.update(visible=False, value=""),  # validation_msg
                 gr.update(interactive=False),  # submit_btn
@@ -150,7 +184,6 @@ def demo_app(config: SpeechGeneratorConfig, synthesize_fn):
             inputs=[],
             outputs=[
                 prompt_audio,
-                prompt_text,
                 target_text,
                 output_audio,
                 download_btn,
@@ -162,19 +195,16 @@ def demo_app(config: SpeechGeneratorConfig, synthesize_fn):
         # --- Add Examples ---
         gr.Markdown("### Examples")
         ex = gr.Examples(
-            examples=[
-                [
-                    "assets/app/male.wav",
-                    "You could take the easy route or a situation that makes sense which a lot of you do",
-                    "Hey, how are you doing? I just uhm want to make sure everything is okay.",
-                ],
-                [
-                    "assets/app/female.wav",
-                    "I would certainly anticipate some pushback whereas most people know if you followed my work.",
-                    "Hello, hello. Let's have a quick chat, uh, in an hour. I need to share something with you.",
-                ],
+            examples=demo_examples,
+            inputs=[
+                prompt_audio,
+                target_text,
+                prompt_enhancement,
+                voice_activity_detection,
+                streaming_input,
+                speaking_rate_control,
+                enable_speaking_rate,
             ],
-            inputs=[prompt_audio, prompt_text, target_text],
             outputs=[output_audio, download_btn],
             fn=synthesize_fn,
             cache_examples=False,
@@ -184,6 +214,11 @@ def demo_app(config: SpeechGeneratorConfig, synthesize_fn):
             fn=_clear_outputs,
             inputs=[],
             outputs=[output_audio, download_btn],
+            queue=False,
+        ).then(
+            fn=validate_inputs,
+            inputs=[prompt_audio, target_text],
+            outputs=[validation_msg, submit_btn],
             queue=False,
         )
 
@@ -199,21 +234,60 @@ def main():
         help="Path to the config file",
         default="configs/generator.json",
     )
+    parser.add_argument(
+        "--spk-rate-config",
+        type=existing_file,
+        help="Path to the speaking rate config file",
+        default="configs/speaking_rate.json",
+    )
+    parser.add_argument(
+        "--examples-config",
+        type=existing_file,
+        help="Path to the examples config file",
+        default="assets/examples.json",
+    )
     args = parser.parse_args()
 
     with open(args.config) as f:
         config = SpeechGeneratorConfig(**json.load(f))
+
+    with open(args.spk_rate_config) as f:
+        speaking_rate_config = json.load(f)
+
+    with open(args.examples_config) as f:
+        examples_config = json.load(f)
+    demo_examples = examples_config.get("examples", [])
+
     speech_generator = SpeechGenerator(config)
     CHUNK_SIZE = int(config.mimi_sr * MIN_CHUNK_SEC)
 
-    def synthesize_fn(prompt_audio_path, prompt_text, target_text):
+    def synthesize_fn(
+        prompt_audio_path,
+        target_text,
+        prompt_enhancement,
+        voice_activity_detection,
+        streaming_input,
+        speaking_rate_control,
+        enable_speaking_rate=True,
+    ):
         if not prompt_audio_path or not target_text:
             return None, gr.update(value=None, visible=False)
 
+        if enable_speaking_rate:
+            duration_state, weight, cfg_gamma = interpolate_speaking_rate_params(
+                speaking_rate_config, speaking_rate_control
+            )
+        else:
+            duration_state, weight, cfg_gamma = None, None, None
+
         stream = speech_generator.generate_stream(
-            prompt_text=prompt_text,
             prompt_audio_path=Path(prompt_audio_path),
-            text=target_text,
+            text=text_generator(target_text) if streaming_input else target_text,
+            target_spk_rate_cnt=duration_state,
+            spk_rate_weight=weight,
+            cfg_gamma=cfg_gamma,
+            enhance_prompt=prompt_enhancement,
+            apply_vad=voice_activity_detection,
         )
 
         buffer = []
@@ -257,7 +331,7 @@ def main():
         else:
             yield None, gr.update(value=None, visible=False)
 
-    demo_app(config, synthesize_fn)
+    demo_app(config, demo_examples, synthesize_fn)
 
 
 if __name__ == "__main__":

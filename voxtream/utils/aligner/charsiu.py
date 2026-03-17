@@ -26,6 +26,7 @@ from transformers import (
 )
 from transformers.modeling_outputs import CausalLMOutput
 
+from voxtream.utils.aligner.base import BaseAligner
 from voxtream.utils.generator import ensure_nltk_resource
 
 
@@ -339,12 +340,12 @@ class CharsiuPreprocessor:
         return merged
 
 
-class CharsiuForcedAligner:
+class CharsiuForcedAligner(BaseAligner):
     """Forced alignment using Wav2Vec2 acoustic model."""
 
     def __init__(
         self,
-        aligner: str,
+        aligner: str = "charsiu/en_w2v2_fc_10ms",
         sil_threshold: int = 4,
         sampling_rate: int = 16000,
         device: str | None = None,
@@ -446,7 +447,9 @@ class CharsiuForcedAligner:
 
         return alignment
 
-    def align(self, audio: torch.Tensor, orig_sr: int, text: str) -> dict:
+    def align(
+        self, audio: torch.Tensor, orig_sr: int, text: str, *args, **kwargs
+    ) -> dict:
         """
         Perform forced alignment.
 
@@ -489,4 +492,7 @@ class CharsiuForcedAligner:
         pred_phones = seq2duration(_pred_phones, resolution=self.resolution)
         pred_words = self.processor.align_words(pred_phones, phones, words)
 
-        return self.to_mfa_format(pred_phones, pred_words, phones)
+        mfa_format_alignment = self.to_mfa_format(pred_phones, pred_words, phones)
+        mfa_format_alignment["end"] = len(audio.squeeze()) / self.sr
+
+        return mfa_format_alignment

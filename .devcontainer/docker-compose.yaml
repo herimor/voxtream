@@ -9,9 +9,9 @@ services:
       - ..:/workspace
       - ${HOME}:/home/${USER}
       - ${HOME}/.cache:/root/.cache
-      - ${HOME}/nltk_data:/root/nltk_data
-      - ${HOME}/Documents/MFA:/root/Documents/MFA
+      - /shared:/shared
     environment:
+      - PYTHONPATH=/workspace
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     shm_size: "16gb"

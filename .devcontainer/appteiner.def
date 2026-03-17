@@ -1,0 +1,18 @@
+Bootstrap: localimage
+From: /path/to/containers/source/ngc-pt-25.09.sif
+
+%post
+    apt update && \
+    apt install -y git build-essential && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+    if [ -f /workspace/requirements.ngc.txt ]; then
+        pip install --no-cache-dir -r /workspace/requirements.ngc.txt
+    fi
+
+%files
+    . /workspace/
+
+%environment
+    export WORKDIR=/workspace

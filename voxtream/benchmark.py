@@ -4,14 +4,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import torch._inductor.config
 from tqdm.auto import tqdm
 
-from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
+from voxtream.config import SpeechGeneratorConfig
+from voxtream.generator import SpeechGenerator
 from voxtream.utils.generator import existing_file, set_seed, text_generator
-
-torch._inductor.config.coordinate_descent_tuning = True
-torch._inductor.config.fx_graph_cache = True
 
 
 def main():
@@ -36,14 +33,15 @@ def main():
     set_seed()
     with open(args.config) as f:
         config = SpeechGeneratorConfig(**json.load(f))
+
     speech_generator = SpeechGenerator(config, compile=args.compile)
 
     meta = pd.read_csv(args.meta)
 
-    audio_frames, first_packet_latency, gen_times = [], [], []
+    first_packet_latency, gen_times = [], []
     for idx, row in tqdm(meta.iterrows(), total=len(meta)):
+        audio_frames = []
         speech_stream = speech_generator.generate_stream(
-            prompt_text=row.prompt_text,
             prompt_audio_path=Path(row.prompt_audio),
             text=text_generator(row.text),
         )
@@ -63,7 +61,7 @@ def main():
 
     rtf = (np.mean(gen_times) * 1000) / config.mimi_frame_ms
     print(f"First packet latency: {round(np.mean(first_packet_latency) * 1000)} ms")
-    print(f"RTF: {round(rtf, 2)}")
+    print(f"RTF: {round(rtf, 3)}")
 
 
 if __name__ == "__main__":

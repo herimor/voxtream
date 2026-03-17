@@ -3,7 +3,7 @@ torchaudio==2.4.0
 torchtune==0.4.0
 torchao==0.9.0
 lightning==2.4.0
-moshi==0.2.2
+moshi==0.2.11
 huggingface_hub==0.28.1
 g2p-en==2.1.0
 librosa==0.11.0
@@ -12,7 +12,11 @@ inflect==7.5.0
 nltk==3.9.1
 hydra-core==1.3.2
 tensorboard==2.19.0
+setuptools>=70,<81
 transformers==4.50.0
 gradio==4.44.1
 gradio_client==1.3.0
 pydantic==2.10.6
+jiwer==4.0.0
+openai-whisper==20250625
+silero-vad==6.2.0

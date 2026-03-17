@@ -1,0 +1,40 @@
+{
+  "examples": [
+    [
+      "assets/audio/english_male.wav",
+      "Full-stream text-to-speech (TTS) for interactive systems must start speaking with minimal delay while remaining controllable as text arrives incrementally."
+    ],
+    [
+      "assets/audio/english_female.wav",
+      "We present VoXtream2, a zero-shot full-stream TTS model with dynamic speaking-rate control that can be updated mid-utterance on the fly."
+    ],
+    [
+      "assets/audio/chinese_female.wav",
+      "VoXtream2 combines a distribution matching mechanism over duration states with classifier-free guidance across conditioning signals to improve controllability and synthesis quality."
+    ],
+    [
+      "assets/audio/hindi_male.wav",
+      "Prompt-text masking enables textless audio prompting, removing the need for prompt transcription."
+    ],
+    [
+      "assets/audio/spanish_male.wav",
+      "Across standard zero-shot benchmarks and a dedicated speaking-rate test set, VoXtream2 achieves competitive objective and subjective results against public baselines."
+    ],
+    [
+      "assets/audio/arabic_female.wav",
+      "In full-stream mode, it runs 4 times faster than real time with 74 ms first-packet latency on a consumer GPU."
+    ],
+    [
+      "assets/audio/french_female.wav",
+      "It has long been argued that conversational agents must be able to generate speech incrementally."
+    ],
+    [
+      "assets/audio/russian_female.wav",
+      "Recent progress in neural text-to-speech (TTS) synthesis has led to highly natural and intelligible speech generation."
+    ],
+    [
+      "assets/audio/swedish_male.wav",
+      "However, most contemporary systems implicitly assume that speaking rate is static across an utterance, typically allowing only coarse, global control over speed."
+    ] 
+  ]
+}

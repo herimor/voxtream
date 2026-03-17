@@ -1,4 +1,5 @@
 import lightning as L
+import torch
 import torch.nn.functional as F
 from huggingface_hub import hf_hub_download
 from omegaconf import DictConfig
@@ -12,39 +13,62 @@ from voxtream.model import Model, ModelConfig
 
 
 class Trainer(L.LightningModule):
-    def __init__(self, config: DictConfig):
+    def __init__(self, config: DictConfig) -> None:
         super().__init__()
 
         self.config = config
         self._init_metrics(
             audio_vocab_size=config.model.audio_vocab_size,
             num_phone_states=config.model.num_phone_states,
+            audio_pad_size=config.model.audio_pad_size,
         )
 
         # Init model
         model_config = ModelConfig(**config.model)
         self.model = Model(model_config, config.compile_forward)
 
-        if config.dep_former_name is not None:
+        if config.model_weight_path is not None:
+            weights = torch.load(config.model_weight_path, map_location="cpu")
+            state_dict = {}
+            # Remove torch lightning 'model.' prefix
+            for k, v in weights["state_dict"].items():
+                k = k.replace("model.", "")
+                state_dict[k] = v
+            self.model.load_state_dict(state_dict, strict=True)
+
+        dep_former_weight_path = None
+        if config.dep_former_weight_path is not None:
+            dep_former_weight_path = config.dep_former_weight_path
+        elif config.dep_former_name is not None:
             dep_former_weight_path = hf_hub_download(
                 config.model_repo, config.dep_former_name
             )
+
+        if dep_former_weight_path is not None:
             state_dict = load_file(dep_former_weight_path)
             self.model.load_state_dict(state_dict, strict=False)
 
             # Freeze pre-trained layers
-            self.model.audio_head.requires_grad = False
-            for param in self.model.audio_embeddings.parameters():
-                param.requires_grad = False
+            if config.freeze_dep_former:
+                self.model.audio_head.requires_grad = False
+                for param in self.model.audio_embeddings.parameters():
+                    param.requires_grad = False
 
-            for param in self.model.dep_former.parameters():
-                param.requires_grad = False
+                for param in self.model.dep_former.parameters():
+                    param.requires_grad = False
 
     def _init_metrics(
-        self, audio_vocab_size: int, num_phone_states: int, top_k: int = 10
+        self,
+        audio_vocab_size: int,
+        num_phone_states: int,
+        audio_pad_size: int,
+        top_k: int = 10,
     ):
         self.metrics_config = {
-            "semantic_acc_top10": (audio_vocab_size * num_phone_states, top_k),
+            "semantic_acc_top10": (
+                (audio_vocab_size + audio_pad_size) * num_phone_states,
+                top_k,
+            ),
             "audio_acc_top10": (audio_vocab_size, top_k),
         }
         metrics = {}
@@ -62,10 +86,11 @@ class Trainer(L.LightningModule):
             audio_codes,
             semantic_labels,
             audio_labels,
+            punct_del_indices,
             spk_templates,
         ) = batch
         logits, audio_logits, rand_idx = self.model(
-            phone_seq, phone_emb_idx, audio_codes, spk_templates
+            phone_seq, phone_emb_idx, audio_codes, punct_del_indices, spk_templates
         )
 
         semantic_loss = F.cross_entropy(logits, semantic_labels)
