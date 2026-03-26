@@ -16,12 +16,34 @@ from voxtream.utils.test.spk_sim import main as spk_sim
 from voxtream.utils.test.utmos import main as utmos
 
 
+def load_emilia_spk_rate_test(prompt_ext: str = "flac"):
+    dataset_dir = snapshot_download("herimor/voxtream2-test", repo_type="dataset")
+    dataset_dir = Path(dataset_dir) / "test"
+    meta_path = dataset_dir / "metadata.csv"
+    protocol = pd.read_csv(meta_path)
+
+    return dataset_dir, protocol, prompt_ext
+
+
+def load_seedtts_en_test(dataset_dir: Path, prompt_ext: str = "wav"):
+    protocol = pd.read_csv(
+        filepath_or_buffer=dataset_dir / "meta.lst",
+        sep="|",
+        header=None,
+        names=["path", "prompt_text", "file_name", "text"],
+    )
+
+    return dataset_dir, protocol, prompt_ext
+
+
 def main(
+    dataset: str,
     output_dir: Path,
     speaking_rate: float,
     spk_sim_model: str,
     asr_model_name: str,
     file_ext: str,
+    dataset_dir: Path = None,
 ):
     set_seed()
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -33,10 +55,12 @@ def main(
 
     speech_generator = SpeechGenerator(config)
 
-    dataset_dir = snapshot_download("herimor/voxtream2-test", repo_type="dataset")
-    dataset_dir = Path(dataset_dir) / "test"
-    meta_path = dataset_dir / "metadata.csv"
-    protocol = pd.read_csv(meta_path)
+    if dataset == "voxtream2-test":
+        dataset_dir, protocol, prompt_ext = load_emilia_spk_rate_test()
+    elif dataset == "seedtts-en":
+        dataset_dir, protocol, prompt_ext = load_seedtts_en_test(dataset_dir, file_ext)
+    else:
+        raise ValueError(f"Unsupported dataset: {dataset}")
 
     for _, row in tqdm(
         protocol.iterrows(), total=len(protocol), desc="Generating speech"
@@ -47,12 +71,16 @@ def main(
         else:
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
-        duration_state, weight, cfg_gamma = interpolate_speaking_rate_params(
-            speaking_rate_config, speaking_rate, logger=speech_generator.logger
-        )
+        duration_state, weight, cfg_gamma = None, None, None
+        if speaking_rate is not None:
+            duration_state, weight, cfg_gamma = interpolate_speaking_rate_params(
+                speaking_rate_config, speaking_rate, logger=speech_generator.logger
+            )
 
         speech_stream = speech_generator.generate_stream(
-            prompt_audio_path=(dataset_dir / row.file_name).with_suffix(f".{file_ext}"),
+            prompt_audio_path=(dataset_dir / row.file_name).with_suffix(
+                f".{prompt_ext}"
+            ),
             text=row.text,
             target_spk_rate_cnt=duration_state,
             spk_rate_weight=weight,
@@ -64,19 +92,19 @@ def main(
 
     # Objective evaluation
     utmos(
-        meta_path=meta_path,
+        meta=protocol,
         dataset_dir=output_dir,
         file_ext=file_ext,
     )
     spk_sim(
         model_name=spk_sim_model,
-        meta_path=meta_path,
+        meta=protocol,
         dataset_dir=output_dir,
         reference_dir=dataset_dir,
         file_ext=file_ext,
     )
     wer(
-        meta_path=meta_path,
+        meta=protocol,
         dataset_dir=output_dir,
         asr_model_name=asr_model_name,
         file_ext=file_ext,
@@ -85,6 +113,21 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-d",
+        "--dataset",
+        type=str,
+        help="Dataset name",
+        default="voxtream2-test",
+        choices=["voxtream2-test", "seedtts-en"],
+    )
+    parser.add_argument(
+        "-dd",
+        "--dataset-dir",
+        type=str,
+        help="Dataset directory",
+        default=None,
+    )
     parser.add_argument(
         "-o",
         "--output-dir",
@@ -96,7 +139,7 @@ if __name__ == "__main__":
         "--speaking-rate",
         type=float,
         help="Speaking rate control",
-        default=4.0,
+        default=None,
     )
     parser.add_argument(
         "-spk",
@@ -120,9 +163,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     main(
+        dataset=args.dataset,
         output_dir=Path(args.output_dir),
         speaking_rate=args.speaking_rate,
         spk_sim_model=args.spk_sim_model,
         asr_model_name=args.asr_model_name,
         file_ext=args.file_ext,
+        dataset_dir=Path(args.dataset_dir) if args.dataset_dir else None,
     )

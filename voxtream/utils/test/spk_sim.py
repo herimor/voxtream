@@ -79,7 +79,7 @@ def main(
     model_name: str,
     dataset_dir: Path,
     reference_dir: Path | None = None,
-    meta_path: str | None = None,
+    meta: pd.DataFrame | str | None = None,
     sample_rate: int = 16000,
     file_ext: str = "flac",
 ):
@@ -111,14 +111,17 @@ def main(
             continue
 
     # STEP 2: Calculate SPK-SIM
-    if reference_dir is not None and meta_path is not None:
-        if meta_path.suffix == ".parquet":
-            meta = pd.read_parquet(meta_path)
+    if reference_dir is not None and meta is not None:
+        if isinstance(meta, str):
+            if meta.endswith(".parquet"):
+                meta_df = pd.read_parquet(meta)
+            else:
+                meta_df = pd.read_csv(meta)
         else:
-            meta = pd.read_csv(meta_path)
+            meta_df = meta
 
         templates_map: dict[str, list[Any]] = {"ref": [], "file": []}
-        for path, prompt_path in meta[["path", "file_name"]].values:
+        for path, prompt_path in meta_df[["path", "file_name"]].values:
             audio_prompt_path = (reference_dir / prompt_path).with_suffix(
                 f".{file_ext}"
             )
@@ -188,6 +191,6 @@ if __name__ == "__main__":
         model_name=args.model_name,
         dataset_dir=Path(args.dataset_dir),
         reference_dir=Path(args.reference_dir) if args.reference_dir else None,
-        meta_path=args.meta_path,
+        meta=args.meta_path,
         file_ext=args.file_ext,
     )

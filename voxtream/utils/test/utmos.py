@@ -12,7 +12,7 @@ warnings.filterwarnings("ignore")
 
 
 def main(
-    meta_path: Path,
+    meta: pd.DataFrame | str,
     dataset_dir: Path,
     file_ext: str = "flac",
     model_name: str = "utmos22_strong",
@@ -25,10 +25,11 @@ def main(
         print(avg_score)
         return
 
-    if meta_path.suffix == ".parquet":
-        meta = pd.read_parquet(meta_path)
-    else:
-        meta = pd.read_csv(meta_path)
+    if isinstance(meta, str):
+        if meta.endswith(".parquet"):
+            meta = pd.read_parquet(meta)
+        else:
+            meta = pd.read_csv(meta)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = torch.hub.load(repo_id, model_name, trust_repo=True, verbose=False)
@@ -63,4 +64,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    main(args.meta_path, Path(args.dataset_dir))
+    main(meta=args.meta, dataset_dir=Path(args.dataset_dir))

@@ -140,7 +140,7 @@ def load_audio(path: Path, sample_rate: int):
 
 
 def main(
-    meta_path: str,
+    meta: pd.DataFrame | str,
     dataset_dir: Path,
     asr_model_name: str,
     sample_rate: int = 16000,
@@ -156,12 +156,15 @@ def main(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     processor, model, transcribe = MODEL_POOL[asr_model_name](asr_model_name, device)
 
-    if meta_path.suffix == ".parquet":
-        meta = pd.read_parquet(meta_path)
-    elif meta_path.suffix == ".csv":
-        meta = pd.read_csv(meta_path)
-    else:
-        raise ValueError(f"Unsupported metadata file format: {meta_path}")
+    if isinstance(meta, str):
+        if meta.endswith(".parquet"):
+            meta = pd.read_parquet(meta)
+        elif meta.endswith(".csv"):
+            meta = pd.read_csv(meta)
+        else:
+            raise ValueError(f"Unsupported metadata file format: {meta}")
+    elif not isinstance(meta, pd.DataFrame):
+        raise TypeError("Invalid metadata type")
 
     normalizer = EnglishTextNormalizer()
     wer_scores: dict[str, list[Any]] = {
@@ -254,7 +257,7 @@ if __name__ == "__main__":
 
     set_seed()
     main(
-        meta_path=args.meta_path,
+        meta=args.meta_path,
         dataset_dir=Path(args.dataset_dir),
         asr_model_name=args.asr_model,
         file_ext=args.file_ext,
