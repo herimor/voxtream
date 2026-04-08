@@ -105,7 +105,7 @@ def interpolate_speaking_rate_params(
 
     min_rate = parsed[0][0]
     max_rate = parsed[-1][0]
-    if speaking_rate <= min_rate:
+    if speaking_rate < min_rate:
         if logger:
             logger.warning(
                 f"Speaking rate {speaking_rate} is below the minimum configured rate {min_rate}. "
@@ -117,7 +117,7 @@ def interpolate_speaking_rate_params(
             float(base["weight"]),
             float(base["cfg_gamma"]),
         )
-    if speaking_rate >= max_rate:
+    if speaking_rate > max_rate:
         if logger:
             logger.warning(
                 f"Speaking rate {speaking_rate} is above the maximum configured rate {max_rate}. "
@@ -134,7 +134,7 @@ def interpolate_speaking_rate_params(
     upper_rate, upper_state = parsed[-1]
     for idx in range(1, len(parsed)):
         candidate_rate, candidate_state = parsed[idx]
-        if candidate_rate >= speaking_rate:
+        if candidate_rate > speaking_rate:
             lower_rate, lower_state = parsed[idx - 1]
             upper_rate, upper_state = candidate_rate, candidate_state
             break

@@ -131,6 +131,15 @@ def prepare_sentence(text):
     return text
 
 
+def remove_fillers(text):
+    text_tokens = []
+    for word in text.split():
+        if prepare_sentence(word) not in FILLER_WORDS:
+            text_tokens.append(word)
+
+    return " ".join(text_tokens)
+
+
 def load_audio(path: Path, sample_rate: int):
     audio, sr = sf.read(path)
     if sr != sample_rate:
@@ -145,6 +154,7 @@ def main(
     asr_model_name: str,
     sample_rate: int = 16000,
     file_ext: str = "flac",
+    min_audio_length_sec: float = 0.2,
 ):
     scores_file_name = "wer_whisper" if "whisper" in asr_model_name else "wer_hubert"
     if (dataset_dir / f"{scores_file_name}.txt").exists():
@@ -184,7 +194,7 @@ def main(
 
         try:
             audio = load_audio(audio_path, sample_rate)
-            if len(audio) < 0.2 * sample_rate:
+            if len(audio) < min_audio_length_sec * sample_rate:
                 print(f"Audio file is too short: {audio_path}")
                 continue
         except Exception:
@@ -193,17 +203,16 @@ def main(
 
         pred_text = transcribe(processor, model, audio, sr=sample_rate, device=device)
 
+        # Original transcription
         wer_score = wer(prepare_sentence(row.text), prepare_sentence(pred_text))
-        wer_score_norm = wer(normalizer(row.text), normalizer(pred_text))
 
         # remove fillers
-        text_tokens = [
-            t for t in prepare_sentence(row.text).split() if t not in FILLER_WORDS
-        ]
-        pred_text_tokens = [
-            t for t in prepare_sentence(pred_text).split() if t not in FILLER_WORDS
-        ]
-        wer_score_wo_fillers = wer(" ".join(text_tokens), " ".join(pred_text_tokens))
+        text = remove_fillers(row.text)
+        pred_text = remove_fillers(pred_text)
+        wer_score_wo_fillers = wer(prepare_sentence(text), prepare_sentence(pred_text))
+
+        # Whisper normalization + removed fillers
+        wer_score_norm = wer(normalizer(text), normalizer(pred_text))
 
         wer_scores["path"].append(row.path)
         wer_scores["text"].append(row.text)
