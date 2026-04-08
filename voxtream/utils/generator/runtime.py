@@ -43,6 +43,10 @@ def update_indices_and_tokens(
         if start >= phone_seq_len - 2 and frame_state.state_counter[state] == 3:
             start += 1
             state = (start, start + num_tokens)
+        # Push the model to move forward if it's stuck on the same state for too long
+        elif frame_state.state_counter[state] > ctx.config.frame_repeat_counter:
+            start += 1
+            state = (start, start + num_tokens)
 
     eos_idx = frame_state.eos_idx
 

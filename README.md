@@ -15,6 +15,7 @@ We present VoXtream2, a zero-shot full-stream TTS model with dynamic speaking-ra
 
 ## Updates
 
+- `2026/04`: Added a frame repeat counter. Reduces hallucinations caused by models getting stuck in the same frame. Controlled by the `frame_repeat_counter` parameter in `SpeechGeneratorConfig`. Recommended value (12-25), lower values for stricter control.
 - `2026/03`: We released VoXtream2.
 - `2026/01`: VoXtream is accepted for an oral presentation at ICASSP 2026.
 - `2025/09`: We released VoXtream. Now available at [voxtream](https://github.com/herimor/voxtream/tree/voxtream) branch.
@@ -34,7 +35,7 @@ brew install espeak-ng
 
 ### Pip package
 ```bash
-pip install "voxtream>=0.2"
+pip install "voxtream>=0.2.1"
 ```
 
 ## Usage

@@ -45,6 +45,7 @@
     "min_look_ahead_phones": 3,
     "phonemizer": "espeak",
     "spk_rate_window_sec": 3.0,
+    "frame_repeat_counter": 25,
     "punct_map": {
         ".": 117,
         ",": 118,

@@ -52,3 +52,4 @@ class SpeechGeneratorConfig:
     apply_vad: bool
     min_speech_seg_sec: float
     min_look_ahead_phones: int
+    frame_repeat_counter: int
