@@ -210,10 +210,9 @@ class TrainDataset(Dataset):
         tokens = np.array(tokens).astype(self.dtype)
 
         mask = (ins_idx > min_idx) & (ins_idx <= max_idx + 1)
-        phoneme_sequence = np.insert(
-            phoneme_sequence, ins_idx[mask] - min_idx, tokens[mask]
-        )
-        punct_del_idx = punct_del_idx[mask] - min_idx + 1  # <BOS>
+        ins_in_slice = ins_idx[mask] - min_idx
+        phoneme_sequence = np.insert(phoneme_sequence, ins_in_slice, tokens[mask])
+        punct_del_idx = (ins_in_slice + np.arange(mask.sum())).astype(self.dtype) + 1  # <BOS>
 
         # Add prompt <UNK> phone tokens
         phoneme_sequence = np.concatenate(
