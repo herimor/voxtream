@@ -1,13 +1,17 @@
 # VoXtream2: Full-stream TTS with dynamic speaking rate control
 
 [![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/pdf/2603.13518)
-[![Demo page](https://img.shields.io/badge/VoXtream2-Demo_page-red)](https://herimor.github.io/voxtream2)
 [![Model](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Model-yellow)](https://huggingface.co/herimor/voxtream2)
-[![Live demo](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Live_demo-yellow)](https://huggingface.co/spaces/herimor/voxtream2)
+<!-- [![Demo page](https://img.shields.io/badge/VoXtream2-Demo_page-red)](https://herimor.github.io/voxtream2) -->
+<!-- [![Live demo](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Live_demo-yellow)](https://huggingface.co/spaces/herimor/voxtream2) -->
 
 We present VoXtream2, a zero-shot full-stream TTS model with dynamic speaking-rate control that can be updated mid-utterance on the fly.
 
-## Key featues
+For audio examples, see our [demo page](https://herimor.github.io/voxtream2).
+
+Try VoXtream2 in your browser on HuggingFace 🤗 [space](https://huggingface.co/spaces/herimor/voxtream2).
+
+## Key features
 
 - **Dynamic speed control**: Distribution matching and Classifier-free guidance allow for a fine-grained speaking rate control, which can be adjusted as the model generates speech.
 - **Streaming performance**: Works **4x** times faster than real-time and achieves **74 ms** first packet latency in a full-stream on a consumer GPU.
