@@ -5,6 +5,11 @@
   <p>
     <b>🎤 Accepted for Oral Presentation at ICASSP 2026</b>
   </p>
+  <p>
+    <b>
+      We have now released <a href="https://herimor.github.io/voxtream2" target="_blank">VoXtream2</a> with improved performance and dynamic speaking-rate control.
+    </b>
+  </p>
 
   <!-- badges -->
   <p>
