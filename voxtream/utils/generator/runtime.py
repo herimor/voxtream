@@ -1,5 +1,6 @@
 from collections import deque
-from typing import Deque, List, Tuple
+from dataclasses import dataclass
+from typing import Deque, Dict, Iterator, List, Tuple
 
 import numpy as np
 import torch
@@ -7,6 +8,18 @@ from moshi.models import MimiModel
 
 from voxtream.config import SpeechGeneratorConfig
 from voxtream.utils.generator.context import FrameState, GenerationContext
+from voxtream.utils.generator.helpers import interpolate_speaking_rate_params
+
+
+@dataclass
+class SpeakingRateRuntimeState:
+    cfg_gamma: float | None
+    spk_rate_weight: float | None = None
+    target_spk_rate_cnt: torch.Tensor | None = None
+    cur_spk_rate_cnt: torch.Tensor | None = None
+    spk_rate_window_frames: int | None = None
+    spk_rate_history: Deque[int] | None = None
+    last_speaking_rate: float | None = None
 
 
 def decode_audio_frame(
@@ -116,3 +129,133 @@ def init_spk_rate_state(
         frames,
         deque() if frames else None,
     )
+
+
+def init_current_duration_state(
+    config: SpeechGeneratorConfig,
+    device: str,
+) -> Tuple[torch.Tensor, int | None, Deque[int] | None]:
+    duration_bins = max(int(key) for key in config.phoneme_index_map) + 1
+    cur_spk_rate_cnt = torch.ones(
+        duration_bins,
+        dtype=torch.int64,
+        device=device,
+    )
+    frames = (
+        max(
+            1,
+            int(round(config.spk_rate_window_sec * 1000 / config.mimi_frame_ms)),
+        )
+        if config.spk_rate_window_sec is not None and config.spk_rate_window_sec > 0
+        else None
+    )
+    return cur_spk_rate_cnt, frames, deque() if frames else None
+
+
+def update_speaking_rate_params(
+    speaking_rate: Iterator[float] | None,
+    speaking_rate_config: Dict[str, Dict[str, list | float]],
+    state: SpeakingRateRuntimeState,
+    config: SpeechGeneratorConfig,
+    device: str,
+    logger=None,
+) -> SpeakingRateRuntimeState:
+    if speaking_rate is None or speaking_rate_config is None:
+        return state
+
+    try:
+        current_speaking_rate = float(next(speaking_rate))
+    except StopIteration as exc:
+        raise ValueError(
+            "speaking_rate generator must yield indefinitely. "
+            "For a fixed speaking rate, use an iterator that repeats one value."
+        ) from exc
+
+    if current_speaking_rate == state.last_speaking_rate:
+        return state
+
+    duration_state, state.spk_rate_weight, state.cfg_gamma = (
+        interpolate_speaking_rate_params(
+            speaking_rate_config,
+            current_speaking_rate,
+            logger=logger,
+        )
+    )
+
+    if state.target_spk_rate_cnt is None:
+        (
+            state.target_spk_rate_cnt,
+            state.cur_spk_rate_cnt,
+            state.spk_rate_window_frames,
+            state.spk_rate_history,
+        ) = init_spk_rate_state(
+            config=config,
+            target_spk_rate_cnt=duration_state,
+            device=device,
+        )
+    else:
+        updated_target_spk_rate_cnt = torch.tensor(
+            duration_state,
+            dtype=torch.int64,
+            device=device,
+        )
+        if updated_target_spk_rate_cnt.shape == state.target_spk_rate_cnt.shape:
+            state.target_spk_rate_cnt = updated_target_spk_rate_cnt
+        else:
+            (
+                state.target_spk_rate_cnt,
+                state.cur_spk_rate_cnt,
+                state.spk_rate_window_frames,
+                state.spk_rate_history,
+            ) = init_spk_rate_state(
+                config=config,
+                target_spk_rate_cnt=duration_state,
+                device=device,
+            )
+
+    state.last_speaking_rate = current_speaking_rate
+    return state
+
+
+def update_speaking_rate_history(
+    state: SpeakingRateRuntimeState,
+    pred_shift: torch.Tensor,
+) -> SpeakingRateRuntimeState:
+    if state.spk_rate_history is None or state.cur_spk_rate_cnt is None:
+        return state
+
+    state.spk_rate_history.append(int(pred_shift.item()))
+    if len(state.spk_rate_history) > state.spk_rate_window_frames:
+        dropped = state.spk_rate_history.popleft()
+        state.cur_spk_rate_cnt[dropped] -= 1
+    return state
+
+
+def progress_metadata(
+    generated_audio_frames: int,
+    audio_frame_sec: float,
+    frame_state: FrameState,
+    prompt_phone_end_idx: int,
+    speaking_rate_enabled: bool,
+    speaking_rate_state: SpeakingRateRuntimeState,
+) -> Dict:
+    def counter_to_list(counter):
+        if counter is None:
+            return None
+        if isinstance(counter, torch.Tensor):
+            return counter.detach().float().cpu().reshape(-1).tolist()
+        return list(counter)
+
+    return {
+        "time_sec": generated_audio_frames * audio_frame_sec,
+        "phone_position": max(
+            0, int(frame_state.phone_emb_max_idx - prompt_phone_end_idx)
+        ),
+        "speaking_rate": (
+            speaking_rate_state.last_speaking_rate if speaking_rate_enabled else None
+        ),
+        "target_duration_state": counter_to_list(
+            speaking_rate_state.target_spk_rate_cnt
+        ),
+        "current_duration_state": counter_to_list(speaking_rate_state.cur_spk_rate_cnt),
+    }

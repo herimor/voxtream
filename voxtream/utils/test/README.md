@@ -9,7 +9,7 @@ Download WavLM ECAPA-TDNN checkpoint follow [instructions](https://github.com/SW
 Use the following command to run the test. The Emilia speaking-rate dataset, Whisper-ASR and UTMOS models will be downloaded automatically and stored in the `~/.cache` directory. Specify output directory to store generated audio files and target speaking rate from [1-7] range:
 
 ```bash
-python run.py -o /path/to/output/directory --speaking-rate 4.0
+python run.py -o /path/to/output/directory --speaking-rate 4.0 --prompt-enhancement
 ```
 
 ### SEED TTS EN
@@ -17,7 +17,7 @@ python run.py -o /path/to/output/directory --speaking-rate 4.0
 Download dataset following [instructions](https://github.com/BytedanceSpeech/seed-tts-eval?tab=readme-ov-file#dataset) from the official repository. Specify dataset directory, dataset name, and output directory to store generated audio files:
 
 ```bash
-python run.py -d seedtts-en -dd /path/to/seedtts_testset/en -o /path/to/output/directory
+python run.py -d seedtts-en -dd /path/to/seedtts_testset/en -o /path/to/output/directory --prompt-enhancement
 ```
 
 * Note: Make sure the `$PYTHONPATH` variable contains a repository root directory.

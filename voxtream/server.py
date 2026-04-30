@@ -104,9 +104,12 @@ async def lifespan(app: FastAPI):
     config_path = "configs/generator.json"
     with open(config_path) as f:
         config = SpeechGeneratorConfig(**json.load(f))
+    spk_rate_config_path = "configs/speaking_rate.json"
+    with open(spk_rate_config_path) as f:
+        spk_rate_config = json.load(f)
 
     app.state.config = config
-    app.state.speech_generator = SpeechGenerator(config)
+    app.state.speech_generator = SpeechGenerator(config, spk_rate_config)
 
     try:
         yield

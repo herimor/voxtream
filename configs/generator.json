@@ -36,7 +36,7 @@
     "text_context_length": 18,
     "spk_proj_weight": 1.5,
     "audio_pad_token": 2049,
-    "enhance_prompt": true,
+    "enhance_prompt": false,
     "sidon_se_reload_model": false,
     "reset_streaming_state": false,
     "hf_token": null,

@@ -10,6 +10,7 @@ Thanks @vanIvan for implementing.
 """
 
 import logging
+import threading
 from typing import Optional, Union
 
 import numpy as np
@@ -545,3 +546,30 @@ def enhance_audio(audio_path: str, device: Optional[str] = None) -> np.ndarray:
     """
     se = SidonSE(device=device)
     return se.enhance_file(audio_path)
+
+
+class LazySidonSE:
+    def __init__(self, device: str, reload_model: bool, logger: logging.Logger):
+        self._device = device
+        self._reload_model = reload_model
+        self._logger = logger
+        self._model = None
+        self._lock = threading.Lock()
+
+    def _load(self):
+        if self._model is None:
+            with self._lock:
+                if self._model is None:
+                    self._logger.info("Loading Sidon speech enhancement model.")
+
+                    self._model = SidonSE(
+                        device=self._device,
+                        reload_model=self._reload_model,
+                    )
+        return self._model
+
+    def __call__(self, *args, **kwargs):
+        return self._load()(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._load(), name)

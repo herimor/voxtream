@@ -1,5 +1,6 @@
 import argparse
 import json
+from itertools import repeat
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +10,7 @@ from huggingface_hub import snapshot_download
 from tqdm.auto import tqdm
 
 from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
-from voxtream.utils.generator import interpolate_speaking_rate_params, set_seed
+from voxtream.utils.generator import set_seed
 from voxtream.utils.test.asr import MODEL_POOL as ASR_MODELS
 from voxtream.utils.test.asr import main as wer
 from voxtream.utils.test.spk_sim import main as spk_sim
@@ -44,6 +45,7 @@ def main(
     asr_model_name: str,
     file_ext: str,
     dataset_dir: Path = None,
+    enhance_prompt: bool = False,
 ):
     set_seed()
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -51,9 +53,9 @@ def main(
         config = SpeechGeneratorConfig(**json.load(f))
 
     with open(PROJECT_ROOT / "configs/speaking_rate.json") as f:
-        speaking_rate_config = json.load(f)
+        spk_rate_config = json.load(f)
 
-    speech_generator = SpeechGenerator(config)
+    speech_generator = SpeechGenerator(config, spk_rate_config)
 
     if dataset == "voxtream2-test":
         dataset_dir, protocol, prompt_ext = load_emilia_spk_rate_test()
@@ -71,20 +73,13 @@ def main(
         else:
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
-        duration_state, weight, cfg_gamma = None, None, None
-        if speaking_rate is not None:
-            duration_state, weight, cfg_gamma = interpolate_speaking_rate_params(
-                speaking_rate_config, speaking_rate, logger=speech_generator.logger
-            )
-
         speech_stream = speech_generator.generate_stream(
             prompt_audio_path=(dataset_dir / row.file_name).with_suffix(
                 f".{prompt_ext}"
             ),
             text=row.text,
-            target_spk_rate_cnt=duration_state,
-            spk_rate_weight=weight,
-            cfg_gamma=cfg_gamma,
+            speaking_rate=repeat(speaking_rate) if speaking_rate is not None else None,
+            enhance_prompt=enhance_prompt,
         )
 
         audio_frames = [audio_frame for audio_frame, _ in speech_stream]
@@ -160,6 +155,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "-e", "--file-ext", type=str, help="Audio file extension", default="flac"
     )
+    parser.add_argument(
+        "-pe",
+        "--prompt-enhancement",
+        action="store_true",
+        help="Enables prompt enhancement",
+    )
     args = parser.parse_args()
 
     main(
@@ -170,4 +171,5 @@ if __name__ == "__main__":
         asr_model_name=args.asr_model_name,
         file_ext=args.file_ext,
         dataset_dir=Path(args.dataset_dir) if args.dataset_dir else None,
+        enhance_prompt=args.prompt_enhancement,
     )

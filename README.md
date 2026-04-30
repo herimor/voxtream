@@ -19,7 +19,10 @@ Try VoXtream2 in your browser on HuggingFace 🤗 [space](https://huggingface.co
 
 ## Updates
 
-- `2026/04`: Added a frame repeat counter. Reduces hallucinations caused by models getting stuck in the same frame. Controlled by the `frame_repeat_counter` parameter in `SpeechGeneratorConfig`. Recommended value (12-25), lower values for stricter control.
+- `2026/04/30`:
+    - Added a dynamic speaking rate control interactive demo. You can now adjust the speaking rate as the model produces speech in real-time. Run `voxtream-app` locally after installing the package or check our HuggingFace [space](https://huggingface.co/spaces/herimor/voxtream2).
+    - Added cache reset in SynkAttention. Fixed the bug that caused the model to generate noise by relying on an invalid prompt cache.
+- `2026/04/08`: Added a frame repeat counter. Reduces hallucinations caused by models getting stuck in the same frame. Controlled by the `frame_repeat_counter` parameter in `SpeechGeneratorConfig`. Recommended value (12-25), lower values for stricter control.
 - `2026/03`: We released VoXtream2.
 - `2026/01`: VoXtream is accepted for an oral presentation at ICASSP 2026.
 - `2025/09`: We released VoXtream. Now available at [voxtream](https://github.com/herimor/voxtream/tree/voxtream) branch.
@@ -39,7 +42,7 @@ brew install espeak-ng
 
 ### Pip package
 ```bash
-pip install "voxtream>=0.2.1"
+pip install "voxtream>=0.2.3"
 ```
 
 ## Usage
@@ -50,7 +53,7 @@ pip install "voxtream>=0.2.1"
 
 **Notes**: 
 * The model was tested on Ubuntu 22.04, CUDA 12 and PyTorch 2.4.
-* The model requires 4.2Gb of VRAM (can be reduced to 2.2Gb by disabling speech enhancement module).
+* The model requires 2.2Gb of VRAM (enabling speech enhancement adds 2Gb).
 * Maximum generation length is limited to 1 minute.
 * The initial run may take a bit longer to download model weights and warmup model graph.
 * If you experience problems with CUDAGraphs please check this [issue](https://github.com/herimor/voxtream/issues/8).
@@ -61,7 +64,7 @@ pip install "voxtream>=0.2.1"
 ```bash
 voxtream \
     --prompt-audio assets/audio/english_male.wav \
-    --text "In general, however, some method is then needed to evaluate each approximation." \
+    --text "In general, some method is then needed to evaluate each approximation." \
     --output "output_stream.wav"
 ```
 
@@ -75,10 +78,20 @@ voxtream \
     --spk-rate 2.0
 ```
 
+#### Acoustic prompt enhancement
+```bash
+voxtream \
+    --prompt-audio assets/test/english_male.wav \
+    --text "In general, however, some method is then needed to evaluate each approximation." \
+    --output "output_enhanced.wav" \
+    --prompt-enhancement
+```
+
 ### Python API
 
 ```python
 import json
+from itertools import repeat
 from pathlib import Path
 
 import numpy as np
@@ -87,7 +100,6 @@ import soundfile as sf
 from voxtream.utils.generator import (
     set_seed,
     text_generator,
-    interpolate_speaking_rate_params
 )
 from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
 
@@ -97,9 +109,9 @@ with open('configs/generator.json') as f:
     config = SpeechGeneratorConfig(**json.load(f))
 
 with open('configs/speaking_rate.json') as f:
-    speaking_rate_config = json.load(f)
+    spk_rate_config = json.load(f)
 
-speech_generator = SpeechGenerator(config)
+speech_generator = SpeechGenerator(config, spk_rate_config)
 
 # Output streaming, no speaking rate control
 speech_stream = speech_generator.generate_stream(
@@ -110,19 +122,11 @@ speech_stream = speech_generator.generate_stream(
 audio_frames = [audio_frame for audio_frame, _ in speech_stream]
 sf.write('output_stream.wav', np.concatenate(audio_frames), config.mimi_sr)
 
-# Slow speech, 2 syllables per second
-speaking_rate = 2.0
-duration_state, weight, cfg_gamma = interpolate_speaking_rate_params(
-    speaking_rate_config, speaking_rate, logger=speech_generator.logger
-)
-
-# Full streaming & speaking rate control
+# Full streaming & fixed speaking rate control (2 syllables per second)
 speech_stream = speech_generator.generate_stream(
     prompt_audio_path=Path('assets/audio/english_female.wav'),
     text=text_generator("Staff do not always do enough to prevent violence."),
-    target_spk_rate_cnt=duration_state,
-    spk_rate_weight=weight,
-    cfg_gamma=cfg_gamma,
+    speaking_rate=repeat(2.0),
 )
 
 audio_frames = [audio_frame for audio_frame, _ in speech_stream]

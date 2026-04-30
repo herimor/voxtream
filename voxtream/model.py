@@ -435,6 +435,7 @@ class Model(nn.Module):
     def reset_caches(self):
         self.temp_former.reset_caches()
         self.dep_former.reset_caches()
+        self.sink_attention.reset()
 
     def _embed_audio(self, codebook: int, tokens: torch.Tensor) -> torch.Tensor:
         return self.audio_embeddings(tokens + codebook * self.config.audio_vocab_size)

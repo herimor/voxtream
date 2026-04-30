@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Dict, Generator, List
 
 import numpy as np
@@ -7,6 +8,81 @@ from voxtream.config import SpeechGeneratorConfig
 from voxtream.utils.generator.context import GenerationContext
 from voxtream.utils.model import remove_punctuation
 from voxtream.utils.text.normalizer import english_normalizer
+
+VOWEL_PHONEME_SYMBOLS = set("aeiouæɑɒɔəɚɛɜɝɪɨʊʌøœɐɞɘɵɤɯyʉ")
+
+
+@dataclass
+class WordPhoneSpan:
+    text: str
+    start: int
+    end: int
+
+
+@dataclass
+class TextProgressMetadata:
+    words: List[WordPhoneSpan]
+    phones: List[str]
+    vowel_prefix: List[int]
+
+
+def is_vowel_phone(phone: str) -> bool:
+    """Approximate whether an IPA phoneme contains a vowel nucleus."""
+    return any(ch in VOWEL_PHONEME_SYMBOLS for ch in phone.lower())
+
+
+def build_text_progress_metadata(
+    text: str,
+    config: SpeechGeneratorConfig,
+    phone_to_token: Dict,
+    phonemizer,
+    normalize: bool = True,
+    language: str = "en-us",
+    max_phone_tokens: int | None = None,
+) -> TextProgressMetadata:
+    """Build word spans and vowel counts in phoneme-token coordinates."""
+    if normalize:
+        text = english_normalizer(text)
+
+    display_words = text.split()
+    phonemes = phonemizer.phonemize(text, language=language)
+    phoneme_words = phonemes.split()
+    punct_symbols = tuple(config.punct_map.keys())
+
+    phones: List[str] = []
+    words: List[WordPhoneSpan] = []
+    truncated = False
+
+    for idx, phoneme_word in enumerate(phoneme_words):
+        word_phones = [ph for ph in phoneme_word.split("|") if ph]
+        if word_phones and word_phones[-1].endswith(punct_symbols):
+            phone = word_phones.pop()
+            if phone[:-1]:
+                word_phones.append(phone[:-1])
+
+        start = len(phones)
+        for ph in word_phones:
+            phones.append(ph)
+            if max_phone_tokens is not None and len(phones) >= max_phone_tokens:
+                truncated = True
+                break
+
+        end = len(phones)
+        display_word = display_words[idx] if idx < len(display_words) else phoneme_word
+        words.append(WordPhoneSpan(text=display_word, start=start, end=end))
+
+        if max_phone_tokens is not None and len(phones) >= max_phone_tokens:
+            break
+
+    if not truncated and len(display_words) > len(words):
+        for word in display_words[len(words) :]:
+            words.append(WordPhoneSpan(text=word, start=len(phones), end=len(phones)))
+
+    vowel_prefix = [0]
+    for phone in phones:
+        vowel_prefix.append(vowel_prefix[-1] + int(is_vowel_phone(phone)))
+
+    return TextProgressMetadata(words=words, phones=phones, vowel_prefix=vowel_prefix)
 
 
 def text_to_phone_tokens(

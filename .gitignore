@@ -8,3 +8,4 @@ dist/
 *.egg-info/
 gradio_cached_examples/
 wavlm-large/
+.codex

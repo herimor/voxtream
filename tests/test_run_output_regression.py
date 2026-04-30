@@ -41,11 +41,12 @@ def test_run_main_output_matches_reference(monkeypatch, tmp_path):
             "-c",
             str(config_path),
             "-pa",
-            str(repo_root / "assets" / "audio" / "english_male.wav"),
+            str(repo_root / "assets" / "test" / "english_male.wav"),
             "-t",
             "reference text",
             "-o",
             str(output_path),
+            "--prompt-enhancement",
         ],
     )
 
