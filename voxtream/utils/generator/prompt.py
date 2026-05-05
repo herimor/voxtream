@@ -135,7 +135,7 @@ def prepare_prompt(
             device, dtype=dtype
         )
     else:
-        waveform, orig_sr = torchaudio.load(prompt_audio_path)
+        waveform, orig_sr = torchaudio.load(str(prompt_audio_path))
         if waveform.shape[0] != 1:
             logger.warning(
                 f"Prompt audio has {waveform.shape[0]} channels; converting to mono by averaging."
