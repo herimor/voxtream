@@ -1,3 +1,5 @@
+import hashlib
+import json
 from pathlib import Path
 from typing import Tuple
 
@@ -10,6 +12,68 @@ from torchaudio.transforms import Resample
 
 from voxtream.config import SpeechGeneratorConfig
 from voxtream.utils.generator.helpers import autocast_ctx
+
+
+PROMPT_CACHE_VERSION = 1
+
+
+def _prompt_cache_path(prompt_audio_path: Path) -> Path:
+    return prompt_audio_path.parent / f"{prompt_audio_path.stem}.prompt.npz"
+
+
+def _prompt_cache_metadata(
+    prompt_audio_path: Path,
+    config: SpeechGeneratorConfig,
+    enhance_prompt: bool,
+    apply_vad: bool,
+) -> dict[str, object]:
+    stat = prompt_audio_path.stat()
+    key_material = {
+        "version": PROMPT_CACHE_VERSION,
+        "path": str(prompt_audio_path.resolve()),
+        "mtime_ns": stat.st_mtime_ns,
+        "size": stat.st_size,
+        "model_repo": config.model_repo,
+        "model_name": config.model_name,
+        "mimi_repo": config.mimi_repo,
+        "mimi_name": config.mimi_name,
+        "spk_enc_repo": config.spk_enc_repo,
+        "spk_enc_model": config.spk_enc_model,
+        "spk_enc_model_name": config.spk_enc_model_name,
+        "num_codebooks": config.num_codebooks,
+        "audio_delay_frames": config.audio_delay_frames,
+        "mimi_sr": config.mimi_sr,
+        "spk_enc_sr": config.spk_enc_sr,
+        "enhance_prompt": enhance_prompt,
+        "apply_vad": apply_vad,
+        "min_speech_seg_sec": config.min_speech_seg_sec,
+    }
+    encoded = json.dumps(key_material, sort_keys=True, separators=(",", ":")).encode()
+    return {"cache_key": hashlib.sha256(encoded).hexdigest(), **key_material}
+
+
+def _load_prompt_cache(prompt_path: Path, expected_metadata: dict[str, object]):
+    with np.load(prompt_path, allow_pickle=False) as prompt_data:
+        if "metadata" not in prompt_data:
+            return None
+        metadata = json.loads(str(prompt_data["metadata"].item()))
+        if metadata.get("cache_key") != expected_metadata["cache_key"]:
+            return None
+        return prompt_data["audio_tokens"], prompt_data["spk_embedding"]
+
+
+def _save_prompt_cache(
+    prompt_path: Path,
+    metadata: dict[str, object],
+    audio_tokens: torch.Tensor,
+    spk_embedding: torch.Tensor,
+) -> None:
+    np.savez_compressed(
+        prompt_path,
+        metadata=np.array(json.dumps(metadata, sort_keys=True)),
+        audio_tokens=audio_tokens.cpu().numpy(),
+        spk_embedding=spk_embedding.to(device="cpu", dtype=torch.float16).numpy(),
+    )
 
 
 def encode_audio_prompt(
@@ -108,6 +172,9 @@ def extract_speech_frames(
             waveform_16k[:, int(start * vad_sr) : int(end * vad_sr)]
         )
 
+    if not valid_segments:
+        raise ValueError("No speech detected in acoustic prompt")
+
     waveform_vad = torch.cat(valid_segments, dim=1)
     waveform_vad_16k = torch.cat(valid_segments_16k, dim=1)
     return waveform_vad, waveform_vad_16k
@@ -124,17 +191,34 @@ def prepare_prompt(
     spk_enc: torch.nn.Module,
     sidon_se,
     vad: torch.nn.Module,
-    enhance_prompt: bool = None,
-    apply_vad: bool = None,
+    enhance_prompt: bool | None = None,
+    apply_vad: bool | None = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    prompt_path = prompt_audio_path.parent / f"{prompt_audio_path.stem}.prompt.npy"
+    enhance_prompt_enabled = bool(enhance_prompt)
+    apply_vad_enabled = bool(apply_vad)
+    prompt_path = _prompt_cache_path(prompt_audio_path)
+    cache_metadata = _prompt_cache_metadata(
+        prompt_audio_path,
+        config,
+        enhance_prompt=enhance_prompt_enabled,
+        apply_vad=apply_vad_enabled,
+    )
     if config.cache_prompt and prompt_path.exists():
-        prompt_data = np.load(prompt_path, allow_pickle=True).item()
-        audio_tokens = torch.from_numpy(prompt_data["audio_tokens"]).to(device)
-        spk_embedding = torch.from_numpy(prompt_data["spk_embedding"]).to(
-            device, dtype=dtype
-        )
+        cached_prompt = _load_prompt_cache(prompt_path, cache_metadata)
+        if cached_prompt is not None:
+            audio_tokens_np, spk_embedding_np = cached_prompt
+            audio_tokens = torch.from_numpy(audio_tokens_np).to(device)
+            spk_embedding = torch.from_numpy(spk_embedding_np).to(device, dtype=dtype)
+        else:
+            logger.warning("Ignoring stale prompt cache at %s", prompt_path)
+            prompt_path.unlink(missing_ok=True)
+            audio_tokens = None
+            spk_embedding = None
     else:
+        audio_tokens = None
+        spk_embedding = None
+
+    if audio_tokens is None or spk_embedding is None:
         waveform, orig_sr = torchaudio.load(str(prompt_audio_path))
         if waveform.shape[0] != 1:
             logger.warning(
@@ -143,7 +227,7 @@ def prepare_prompt(
             waveform = waveform.mean(dim=0, keepdim=True)
 
         waveform_16k = None
-        if apply_vad:
+        if apply_vad_enabled:
             waveform_16k = torchaudio.functional.resample(
                 waveform, orig_sr, config.spk_enc_sr
             )
@@ -156,9 +240,11 @@ def prepare_prompt(
                 min_speech_seg_sec=config.min_speech_seg_sec,
             )
 
-        assert (
-            waveform.shape[1] >= orig_sr * config.min_prompt_sec
-        ), f"Acoustic prompt is too short ({waveform.shape[1] / orig_sr:.2f} seconds); should be at least {config.min_prompt_sec} seconds."
+        if waveform.shape[1] < orig_sr * config.min_prompt_sec:
+            raise ValueError(
+                f"Acoustic prompt is too short ({waveform.shape[1] / orig_sr:.2f} seconds); "
+                f"should be at least {config.min_prompt_sec} seconds."
+            )
         if waveform.shape[1] > orig_sr * config.max_prompt_sec:
             logger.warning(
                 f"Prompt audio is longer than {config.max_prompt_sec} seconds; trimming."
@@ -168,7 +254,7 @@ def prepare_prompt(
         waveform_mimi = waveform
         sample_rate = orig_sr
 
-        if enhance_prompt:
+        if enhance_prompt_enabled:
             if waveform_16k is None:
                 waveform_16k = torchaudio.functional.resample(
                     waveform, orig_sr, config.spk_enc_sr
@@ -199,15 +285,7 @@ def prepare_prompt(
         )
 
         if config.cache_prompt:
-            np.save(
-                prompt_path,
-                {
-                    "audio_tokens": audio_tokens.cpu().numpy(),
-                    "spk_embedding": spk_embedding.to(
-                        device="cpu", dtype=torch.float16
-                    ).numpy(),
-                },
-            )
+            _save_prompt_cache(prompt_path, cache_metadata, audio_tokens, spk_embedding)
 
     audio_tokens = delay_audio_tokens(
         audio_tokens=audio_tokens,
