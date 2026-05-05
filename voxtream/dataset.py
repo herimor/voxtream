@@ -96,17 +96,18 @@ class TrainDataset(Dataset):
     ):
         # Load data
         data = {}
+        data_chunks = {}
         for name, dataset in datasets.items():
             for key, path in dataset.items():
                 if path is None:
                     data[key] = None
                     continue
 
-                val = np.load(base_dir / name / path, allow_pickle=True)[()]
-                if key not in data:
-                    data[key] = val
-                else:
-                    data[key] = np.concatenate((data[key], val), axis=0)
+                val = np.load(base_dir / name / path, allow_pickle=False)
+                data_chunks.setdefault(key, []).append(val)
+
+        for key, chunks in data_chunks.items():
+            data[key] = chunks[0] if len(chunks) == 1 else np.concatenate(chunks, axis=0)
 
         # Store loaded arrays as attributes
         for key, val in data.items():
@@ -318,14 +319,11 @@ class TrainDataset(Dataset):
         )
 
 
-from functools import partial
-
-import hydra
-from torch.utils.data import DataLoader
-
-
-@hydra.main(version_base=None, config_path="../configs", config_name="train.yaml")
 def main(cfg):
+    from functools import partial
+
+    from torch.utils.data import DataLoader
+
     train_dataset = TrainDataset(
         base_dir=Path(cfg.dataset_base_dir),
         phone_vocab_size=cfg.model.phone_vocab_size,
@@ -351,4 +349,9 @@ def main(cfg):
 
 
 if __name__ == "__main__":
+    import hydra
+
+    main = hydra.main(version_base=None, config_path="../configs", config_name="train.yaml")(
+        main
+    )
     main()
