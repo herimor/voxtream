@@ -48,13 +48,13 @@ class Model(nn.Module):
         self._dep_former_init = self._dep_former
 
         self.phone_former, phone_former_dim = prepare_transformer(
-            MODEL_POOL[config.phone_former]
+            MODEL_POOL[config.phone_former]()
         )
         self.temp_former, temp_former_dim = prepare_transformer(
-            MODEL_POOL[config.temp_former]
+            MODEL_POOL[config.temp_former]()
         )
         self.dep_former, dep_former_dim = prepare_transformer(
-            MODEL_POOL[config.dep_former]
+            MODEL_POOL[config.dep_former]()
         )
 
         self.phone_embeddings = nn.Embedding(config.phone_vocab_size, phone_former_dim)
