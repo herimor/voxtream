@@ -1,6 +1,6 @@
 import json
 from dataclasses import fields
-from typing import Dict, Tuple
+from typing import Any, Tuple, cast
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -16,7 +16,7 @@ def load_generator_model(
     device: str,
     dtype: torch.dtype,
     batch_size: int,
-) -> Tuple[Model, Dict]:
+) -> Tuple[Model, dict[str, Any]]:
     model_config_path = hf_hub_download(
         config.model_repo, config.model_config_name, token=config.hf_token
     )
@@ -70,14 +70,22 @@ def load_mimi_model(
 def load_speaker_encoder(
     config: SpeechGeneratorConfig, device: str, dtype: torch.dtype
 ) -> torch.nn.Module:
-    model = torch.hub.load(
-        config.spk_enc_repo,
-        config.spk_enc_model,
-        model_name=config.spk_enc_model_name,
-        train_type=config.spk_enc_train_type,
-        dataset=config.spk_enc_dataset,
-        trust_repo=True,
-        verbose=False,
+    if config.spk_enc_repo != "IDRnD/ReDimNet":
+        raise ValueError(
+            "Refusing to load untrusted speaker encoder repo. "
+            "Only IDRnD/ReDimNet is allowed by default."
+        )
+    model = cast(
+        torch.nn.Module,
+        torch.hub.load(
+            config.spk_enc_repo,
+            config.spk_enc_model,
+            model_name=config.spk_enc_model_name,
+            train_type=config.spk_enc_train_type,
+            dataset=config.spk_enc_dataset,
+            trust_repo=True,
+            verbose=False,
+        ),
     ).to(device, dtype=dtype)
     model.spec.float()
     model.bn.float()
