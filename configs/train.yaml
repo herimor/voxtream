@@ -6,6 +6,7 @@ hydra:
 exp_name: voxtream_train
 model_repo: herimor/voxtream2
 dataset_repo: herimor/voxtream2-train
+dataset_revision: null
 dataset_base_dir: null
 dep_former_name: dep_former_csm.safetensors
 dep_former_weight_path: null
@@ -21,6 +22,7 @@ precision: bf16-mixed
 gradient_clip_val: 0.5
 seed: 42
 num_workers: 8
+prefetch_factor: 2
 log_every_n_steps: 50
 gpus: -1
 logging_interval: step

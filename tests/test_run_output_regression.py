@@ -25,12 +25,24 @@ def test_run_main_output_matches_reference(monkeypatch, tmp_path):
 
     captured_write = {}
 
-    def fake_sf_write(output_path, data, samplerate):
-        captured_write["path"] = str(output_path)
-        captured_write["data"] = np.asarray(data)
-        captured_write["samplerate"] = samplerate
+    class FakeSoundFile:
+        def __init__(self, output_path, mode, samplerate, channels):
+            captured_write["path"] = str(output_path)
+            captured_write["mode"] = mode
+            captured_write["samplerate"] = samplerate
+            captured_write["channels"] = channels
+            captured_write["chunks"] = []
 
-    monkeypatch.setattr(run.sf, "write", fake_sf_write)
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            captured_write["data"] = np.concatenate(captured_write["chunks"])
+
+        def write(self, data):
+            captured_write["chunks"].append(np.asarray(data))
+
+    monkeypatch.setattr(run.sf, "SoundFile", FakeSoundFile)
 
     output_path = tmp_path / "voxtream_run_ref.wav"
     monkeypatch.setattr(
@@ -53,6 +65,8 @@ def test_run_main_output_matches_reference(monkeypatch, tmp_path):
     run.main()
 
     assert captured_write["path"] == str(output_path)
+    assert captured_write["mode"] == "w"
+    assert captured_write["channels"] == 1
     assert captured_write["data"].shape == expected_audio.shape
     np.testing.assert_allclose(
         captured_write["data"], expected_audio, rtol=1e-5, atol=1e-6

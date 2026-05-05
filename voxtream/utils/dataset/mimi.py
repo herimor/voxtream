@@ -104,7 +104,13 @@ if __name__ == "__main__":
         sep=args.sep,
     )
     dataloader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=args.num_workers > 0,
+        prefetch_factor=2 if args.num_workers > 0 else None,
     )
 
     device = f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"

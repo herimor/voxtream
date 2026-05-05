@@ -1,7 +1,7 @@
 import logging
 import time
 from pathlib import Path
-from typing import Dict, Generator, Iterator
+from typing import Dict, Generator, Iterator, Optional
 
 import numpy as np
 import torch
@@ -145,12 +145,12 @@ class SpeechGenerator:
     def generate_stream(
         self,
         prompt_audio_path: Path,
-        text: str | Generator[str, None, None],
-        speaking_rate: Iterator[float] = None,
-        enhance_prompt: bool = None,
-        apply_vad: bool = None,
+        text: str | Iterator[str | None],
+        speaking_rate: Optional[Iterator[float]] = None,
+        enhance_prompt: bool | None = None,
+        apply_vad: bool | None = None,
         return_progress: bool = False,
-        min_streaming_rtf: float = None,
+        min_streaming_rtf: float | None = None,
     ) -> Generator[
         tuple[np.ndarray, float] | tuple[np.ndarray, float, Dict], None, None
     ]:

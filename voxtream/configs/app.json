@@ -1,0 +1,23 @@
+{
+    "min_chunk_sec": 0.01,
+    "fade_out_sec": 0.1,
+    "plot_window_sec": 10.0,
+    "visual_update_sec": 0.25,
+    "future_phone_limit": 25,
+    "plot_width": 1000,
+    "plot_height": 224,
+    "plot_left": 74,
+    "plot_right": 22,
+    "plot_top": 50,
+    "plot_bottom": 42,
+    "plot_y_max": 7,
+    "plot_y_tick": 1,
+    "plot_x_tick_sec": 1,
+    "audio_stream_start_delay_sec": 0.12,
+    "audio_stream_sample_rate": 24000,
+    "speaking_rate_min": 1.0,
+    "speaking_rate_max": 7.0,
+    "speaking_rate_step": 0.1,
+    "speaking_rate_default": 4.0,
+    "min_streaming_rtf": 0.95
+}
