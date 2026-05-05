@@ -81,6 +81,9 @@ if __name__ == "__main__":
         shuffle=False,
         num_workers=args.num_workers,
         collate_fn=collate_varlen,
+        pin_memory=True,
+        persistent_workers=args.num_workers > 0,
+        prefetch_factor=2 if args.num_workers > 0 else None,
     )
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)

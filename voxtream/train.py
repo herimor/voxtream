@@ -35,7 +35,11 @@ def main(cfg: DictConfig) -> None:
     if cfg.dataset_base_dir is not None:
         base_dir = cfg.dataset_base_dir
     else:
-        base_dir = snapshot_download(cfg.dataset_repo, repo_type="dataset")
+        base_dir = snapshot_download(
+            cfg.dataset_repo,
+            repo_type="dataset",
+            revision=cfg.get("dataset_revision"),
+        )
 
     train_dataset = TrainDataset(
         base_dir=Path(base_dir),
@@ -53,6 +57,9 @@ def main(cfg: DictConfig) -> None:
         num_workers=cfg.num_workers,
         collate_fn=collate_func,
         drop_last=True,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=cfg.num_workers > 0,
+        prefetch_factor=cfg.get("prefetch_factor", 2) if cfg.num_workers > 0 else None,
     )
 
     # Callbacks
