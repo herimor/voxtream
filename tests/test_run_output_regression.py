@@ -3,20 +3,31 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import voxtream.run as run
 
 
 def test_run_main_output_matches_reference(monkeypatch, tmp_path):
 
-    repo_root = Path(__file__).resolve().parents[1]
-    fixture_path = repo_root / "assets" / "test" / "reference_frames.npy"
-    config_path = repo_root / "configs" / "generator.json"
+    device_name = "cuda" if torch.cuda.is_available() else "cpu"
+    fixture_name = (
+        "reference_frames.npy"
+        if device_name == "cuda"
+        else f"reference_frames_{device_name}.npy"
+    )
+    fixture_path = REPO_ROOT / "assets" / "test" / fixture_name
+    config_path = REPO_ROOT / "configs" / "generator.json"
 
     if not fixture_path.exists():
         raise FileNotFoundError(
             f"Missing regression fixture: {fixture_path}. "
-            "Generate it by running `python scripts/generate_run_reference.py`."
+            f"Generate it on a {device_name.upper()} device using the run.py "
+            "regression invocation."
         )
 
     expected_audio = np.load(fixture_path)
@@ -41,7 +52,7 @@ def test_run_main_output_matches_reference(monkeypatch, tmp_path):
             "-c",
             str(config_path),
             "-pa",
-            str(repo_root / "assets" / "test" / "english_male.wav"),
+            str(REPO_ROOT / "assets" / "test" / "english_male.wav"),
             "-t",
             "reference text",
             "-o",
