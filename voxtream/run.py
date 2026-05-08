@@ -1,18 +1,25 @@
 import argparse
-import json
 from itertools import repeat
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import soundfile as sf
 
-from voxtream.config import SpeechGeneratorConfig
+from voxtream.config import (
+    load_generator_config,
+    load_speaking_rate_config,
+    resolve_data_path,
+)
 from voxtream.generator import SpeechGenerator
 from voxtream.utils.generator import (
-    existing_file,
     set_seed,
     text_generator,
 )
+
+
+def _audio_frame(result: tuple[Any, ...]) -> np.ndarray[Any, Any]:
+    return cast(np.ndarray[Any, Any], result[0])
 
 
 def main():
@@ -20,7 +27,7 @@ def main():
     parser.add_argument(
         "-pa",
         "--prompt-audio",
-        type=existing_file,
+        type=Path,
         help="Path to the prompt audio file (5-10 sec of target voice. Max 20 sec).",
         default="assets/audio/english_male.wav",
     )
@@ -40,13 +47,13 @@ def main():
     parser.add_argument(
         "-c",
         "--config",
-        type=existing_file,
+        type=Path,
         help="Path to the config file",
         default="configs/generator.json",
     )
     parser.add_argument(
         "--spk-rate-config",
-        type=existing_file,
+        type=Path,
         help="Path to the speaking rate config file",
         default="configs/speaking_rate.json",
     )
@@ -68,29 +75,29 @@ def main():
     args = parser.parse_args()
 
     set_seed()
-    with open(args.config) as f:
-        config = SpeechGeneratorConfig(**json.load(f))
-
-    with open(args.spk_rate_config) as f:
-        spk_rate_config = json.load(f)
+    config = load_generator_config(args.config)
+    spk_rate_config = load_speaking_rate_config(args.spk_rate_config)
 
     speech_generator = SpeechGenerator(config, spk_rate_config)
 
     if args.text is None:
         speech_generator.logger.error("No text provided.")
-        exit(0)
+        raise SystemExit(2)
 
     speaking_rate = repeat(args.spk_rate) if args.spk_rate is not None else None
 
     speech_stream = speech_generator.generate_stream(
-        prompt_audio_path=Path(args.prompt_audio),
+        prompt_audio_path=resolve_data_path(
+            args.prompt_audio, "assets/audio/english_male.wav"
+        ),
         text=text_generator(args.text) if args.full_stream else args.text,
         speaking_rate=speaking_rate,
         enhance_prompt=args.prompt_enhancement,
     )
 
-    audio_frames = [audio_frame for audio_frame, _ in speech_stream]
-    sf.write(args.output, np.concatenate(audio_frames), config.mimi_sr)
+    with sf.SoundFile(args.output, "w", samplerate=config.mimi_sr, channels=1) as f:
+        for result in speech_stream:
+            f.write(_audio_frame(result))
     speech_generator.logger.info(f"Audio saved to {args.output}")
 
 

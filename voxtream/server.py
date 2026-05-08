@@ -36,42 +36,81 @@ Server responses:
 
 import asyncio
 import base64
+import binascii
 import json
+import logging
 import os
 import re
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional, cast
 
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
-from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig  # type: ignore
+from voxtream.config import (  # type: ignore
+    SpeechGeneratorConfig,
+    load_generator_config,
+    load_speaking_rate_config,
+)
+from voxtream.generator import SpeechGenerator  # type: ignore
 from voxtream.utils.generator import set_seed  # type: ignore
 
 # ---------- Helpers ----------
 
 DATA_URL_RE = re.compile(r"^data:.*?;base64,(.*)$", re.IGNORECASE)
+ALLOWED_PROMPT_SUFFIXES = {".flac", ".m4a", ".mp3", ".ogg", ".wav"}
+MAX_PROMPT_AUDIO_BYTES = 25 * 1024 * 1024
+MAX_TEXT_CHUNK_CHARS = 4_000
+MAX_INITIAL_TEXT_CHARS = 20_000
+MAX_GENERATION_WORKERS = 1
+LOGGER = logging.getLogger("voxtream.server")
 
 
-def _b64_to_bytes(s: str) -> bytes:
+def _b64_to_bytes(s: str, max_bytes: int = MAX_PROMPT_AUDIO_BYTES) -> bytes:
     m = DATA_URL_RE.match(s)
     payload = m.group(1) if m else s
-    return base64.b64decode(payload)
+    compact_payload = "".join(payload.split())
+    if len(compact_payload) > ((max_bytes + 2) // 3) * 4:
+        raise ValueError(f"Prompt audio upload exceeds {max_bytes} bytes")
+    try:
+        raw = base64.b64decode(compact_payload, validate=True)
+    except binascii.Error as err:
+        raise ValueError("prompt_audio_b64 is not valid base64") from err
+    if len(raw) > max_bytes:
+        raise ValueError(f"Prompt audio upload exceeds {max_bytes} bytes")
+    return raw
+
+
+def _validate_prompt_audio_path(prompt_audio_path: str, prompt_root: Path) -> Path:
+    path = Path(prompt_audio_path).expanduser().resolve()
+    prompt_root = prompt_root.expanduser().resolve()
+    if not path.is_relative_to(prompt_root):
+        raise ValueError(f"prompt_audio_path must be inside {prompt_root}")
+    if not path.is_file():
+        raise ValueError("prompt_audio_path must point to an existing file")
+    if path.suffix.lower() not in ALLOWED_PROMPT_SUFFIXES:
+        raise ValueError(
+            f"prompt_audio_path must use one of {sorted(ALLOWED_PROMPT_SUFFIXES)}"
+        )
+    if path.stat().st_size > MAX_PROMPT_AUDIO_BYTES:
+        raise ValueError(f"Prompt audio file exceeds {MAX_PROMPT_AUDIO_BYTES} bytes")
+    return path
 
 
 def _ensure_prompt_audio_file(
-    prompt_audio_path: Optional[str], prompt_audio_b64: Optional[str]
-) -> Path:
+    prompt_audio_path: Optional[str], prompt_audio_b64: Optional[str], prompt_root: Path
+) -> tuple[Path, bool]:
     """
     Returns a filesystem Path to the prompt audio.
     If base64 is provided, writes a temp file with the decoded bytes (wav/ogg input supported by voxtream).
     """
     if prompt_audio_path:
-        return Path(prompt_audio_path)
+        return _validate_prompt_audio_path(prompt_audio_path, prompt_root), False
     if not prompt_audio_b64:
         raise ValueError(
             "Either 'prompt_audio_path' or 'prompt_audio_b64' must be provided."
@@ -84,7 +123,7 @@ def _ensure_prompt_audio_file(
     fd, tmp = tempfile.mkstemp(prefix="voxtream_prompt_", suffix=suffix)
     with os.fdopen(fd, "wb") as f:
         f.write(raw)
-    return Path(tmp)
+    return Path(tmp), True
 
 
 def get_generator_from_state(
@@ -101,15 +140,13 @@ def get_generator_from_state(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     set_seed()
-    config_path = "configs/generator.json"
-    with open(config_path) as f:
-        config = SpeechGeneratorConfig(**json.load(f))
-    spk_rate_config_path = "configs/speaking_rate.json"
-    with open(spk_rate_config_path) as f:
-        spk_rate_config = json.load(f)
+    config = load_generator_config()
+    spk_rate_config = load_speaking_rate_config()
 
     app.state.config = config
     app.state.speech_generator = SpeechGenerator(config, spk_rate_config)
+    app.state.generation_semaphore = threading.BoundedSemaphore(MAX_GENERATION_WORKERS)
+    app.state.prompt_root = Path(os.environ.get("VOXTREAM_PROMPT_ROOT", ".")).resolve()
 
     try:
         yield
@@ -198,16 +235,51 @@ async def synthesis(ws: WebSocket):
             await ws.close()
             return
 
-        prompt_audio_path: Optional[str] = init.get("prompt_audio_path")
-        prompt_audio_b64: Optional[str] = init.get("prompt_audio_b64")
-        text_initial: Optional[str] = init.get("text")
+        prompt_audio_path_value = init.get("prompt_audio_path")
+        prompt_audio_b64_value = init.get("prompt_audio_b64")
+        text_initial_value = init.get("text")
+        if prompt_audio_path_value is not None and not isinstance(prompt_audio_path_value, str):
+            await ws.send_text(
+                json.dumps({"type": "error", "message": "prompt_audio_path must be a string"})
+            )
+            await ws.close()
+            return
+        if prompt_audio_b64_value is not None and not isinstance(prompt_audio_b64_value, str):
+            await ws.send_text(
+                json.dumps({"type": "error", "message": "prompt_audio_b64 must be a string"})
+            )
+            await ws.close()
+            return
+        if text_initial_value is not None and not isinstance(text_initial_value, str):
+            await ws.send_text(
+                json.dumps({"type": "error", "message": "text must be a string"})
+            )
+            await ws.close()
+            return
+
+        prompt_audio_path: Optional[str] = prompt_audio_path_value
+        prompt_audio_b64: Optional[str] = prompt_audio_b64_value
+        text_initial: Optional[str] = text_initial_value
+        if text_initial is not None and len(text_initial) > MAX_INITIAL_TEXT_CHARS:
+            await ws.send_text(
+                json.dumps({"type": "error", "message": "Initial text is too long"})
+            )
+            await ws.close()
+            return
         full_stream: bool = bool(init.get("full_stream", False))
 
         # Optional: override sample rate (if you down/up-sample on client); we always generate at config.mimi_sr.
         sample_rate = config.mimi_sr
 
+        temp_prompt_path: Optional[Path] = None
         try:
-            prompt_path = _ensure_prompt_audio_file(prompt_audio_path, prompt_audio_b64)
+            prompt_path, is_temp_prompt = _ensure_prompt_audio_file(
+                prompt_audio_path,
+                prompt_audio_b64,
+                prompt_root=ws.app.state.prompt_root,
+            )
+            if is_temp_prompt:
+                temp_prompt_path = prompt_path
         except Exception as e:
             await ws.send_text(
                 json.dumps({"type": "error", "message": f"Invalid prompt audio: {e}"})
@@ -229,18 +301,17 @@ async def synthesis(ws: WebSocket):
 
         # --- 2) Prepare text source (string OR generator) ---
         # If full_stream, we build an iterator fed by subsequent websocket messages.
-        text_source: str | Iterator[str]
-        queue: Optional["asyncio.Queue[Optional[str]]"] = None
+        text_source: str | Iterator[str | None]
 
         # --- Prepare text source ---
         if full_stream:
-            queue: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
+            text_queue: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
             feeder_done = asyncio.Event()
 
             async def recv_text_chunks():
                 try:
                     if text_initial:
-                        await queue.put(text_initial)
+                        await text_queue.put(text_initial)
                     while True:
                         msg = await ws.receive()
                         if msg["type"] == "websocket.disconnect":
@@ -250,29 +321,34 @@ async def synthesis(ws: WebSocket):
                                 payload = json.loads(msg["text"])
                             except json.JSONDecodeError:
                                 # treat raw text as a chunk
-                                await queue.put(msg["text"])
+                                await text_queue.put(msg["text"])
                                 continue
 
                             ev = payload.get("event")
                             if ev == "text":
                                 chunk = payload.get("chunk", "")
+                                if not isinstance(chunk, str):
+                                    continue
+                                if len(chunk) > MAX_TEXT_CHUNK_CHARS:
+                                    await text_queue.put(None)
+                                    break
                                 if chunk:
-                                    await queue.put(chunk)
+                                    await text_queue.put(chunk)
                             elif ev == "eot":
                                 break
                         # ignore binary
                 finally:
-                    await queue.put(None)  # signal end-of-text
+                    await text_queue.put(None)  # signal end-of-text
                     feeder_done.set()
 
             asyncio.create_task(recv_text_chunks())
-            text_source = _QueueIterator(queue, loop)  # <— pass loop in
+            text_source = _QueueIterator(text_queue, loop)  # <— pass loop in
         else:
             # ... (unchanged one-shot fallback)
             text_source = text_initial or ""
 
         # --- Streaming out audio (reworked worker error path) ---
-        audio_q: "asyncio.Queue[tuple[Optional[np.ndarray], Optional[str]]]" = (
+        audio_q: "asyncio.Queue[tuple[np.ndarray[Any, Any] | None, str | None]]" = (
             asyncio.Queue(maxsize=8)
         )
         done_evt = asyncio.Event()
@@ -280,19 +356,34 @@ async def synthesis(ws: WebSocket):
         def _run_generator():
             return speech_generator.generate_stream(
                 prompt_audio_path=prompt_path,
-                text=text_source,
+                text=iter(text_source) if not isinstance(text_source, str) else text_source,
             )
 
         def _worker():
             err: Optional[str] = None
+            acquired_generation_slot = False
             try:
-                for audio_frame, _meta in _run_generator():
+                semaphore = ws.app.state.generation_semaphore
+                acquired = semaphore.acquire(blocking=False)
+                if not acquired:
+                    err = "Server is busy; try again later."
+                    return
+                acquired_generation_slot = True
+                for result in _run_generator():
+                    audio_frame = result[0]
                     asyncio.run_coroutine_threadsafe(
-                        audio_q.put((audio_frame, None)), loop
+                        audio_q.put((cast(np.ndarray[Any, Any], audio_frame), None)), loop
                     ).result()
             except Exception as e:
                 err = str(e)
             finally:
+                if acquired_generation_slot:
+                    ws.app.state.generation_semaphore.release()
+                if temp_prompt_path is not None:
+                    try:
+                        temp_prompt_path.unlink(missing_ok=True)
+                    except OSError:
+                        LOGGER.warning("Failed to delete temp prompt %s", temp_prompt_path)
                 # Always send poison pill; attach error message once
                 asyncio.run_coroutine_threadsafe(
                     audio_q.put((None, err)), loop
@@ -300,21 +391,7 @@ async def synthesis(ws: WebSocket):
                 # done_evt.set() is not a coroutine; schedule it thread-safely
                 loop.call_soon_threadsafe(done_evt.set)
 
-        import threading
-
         threading.Thread(target=_worker, daemon=True).start()
-
-        # Tell client config before streaming
-        await ws.send_text(
-            json.dumps(
-                {
-                    "type": "config",
-                    "sample_rate": config.mimi_sr,
-                    "dtype": "float32",
-                    "channels": 1,
-                }
-            )
-        )
 
         # Pump frames out; if we receive an error, send it (if socket still open) then end.
         while True:
@@ -326,8 +403,10 @@ async def synthesis(ws: WebSocket):
                         await ws.send_text(
                             json.dumps({"type": "error", "message": err})
                         )
-                    except Exception:
-                        pass
+                    except WebSocketDisconnect:
+                        return
+                    except Exception as send_err:
+                        LOGGER.debug("Failed to send websocket error", exc_info=send_err)
                 break
             if frame.dtype != np.float32:
                 frame = frame.astype(np.float32, copy=False)
@@ -337,12 +416,14 @@ async def synthesis(ws: WebSocket):
         # graceful end
         try:
             await ws.send_text(json.dumps({"type": "eos"}))
-        except Exception:
-            pass
+        except WebSocketDisconnect:
+            return
+        except Exception as send_err:
+            LOGGER.debug("Failed to send websocket eos", exc_info=send_err)
         try:
             await ws.close()
-        except Exception:
-            pass
+        except Exception as close_err:
+            LOGGER.debug("Failed to close websocket", exc_info=close_err)
 
     except WebSocketDisconnect:
         return
@@ -351,8 +432,8 @@ async def synthesis(ws: WebSocket):
         try:
             await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
             await ws.close()
-        except Exception:
-            pass
+        except Exception as send_err:
+            LOGGER.debug("Failed to send last-ditch websocket error", exc_info=send_err)
 
 
 def main():

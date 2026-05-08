@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Dict, Generator, List
 
@@ -222,7 +223,7 @@ def prepare_non_streaming_text(
 
 
 def prepare_streaming_text(
-    text_gen: Generator[str, None, None],
+    text_gen: Iterator[str | None],
     phone_tokens: torch.Tensor,
     punct_del_indices: torch.Tensor,
     empty_text_stream: bool,

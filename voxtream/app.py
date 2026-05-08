@@ -2,12 +2,18 @@ import argparse
 import json
 import uuid
 from pathlib import Path
+from typing import Any, cast
 
 import gradio as gr
 import numpy as np
 import soundfile as sf
 
-from voxtream.config import SpeechGeneratorConfig
+from voxtream.config import (
+    SpeechGeneratorConfig,
+    load_generator_config,
+    load_speaking_rate_config,
+    resolve_data_path,
+)
 from voxtream.generator import SpeechGenerator
 from voxtream.utils.app import (
     CUSTOM_CSS,
@@ -24,10 +30,13 @@ from voxtream.utils.app import (
     render_text_progress,
 )
 from voxtream.utils.generator import (
-    existing_file,
     text_generator,
 )
 from voxtream.utils.generator.text import build_text_progress_metadata
+
+
+def _progress_frame(result: tuple[Any, ...]) -> tuple[np.ndarray[Any, Any], dict[str, Any]]:
+    return cast(np.ndarray[Any, Any], result[0]), cast(dict[str, Any], result[2])
 
 
 def generation_button_updates(running: bool, paused: bool = False):
@@ -349,39 +358,36 @@ def main():
     parser.add_argument(
         "-c",
         "--config",
-        type=existing_file,
+        type=Path,
         help="Path to the config file",
         default="configs/generator.json",
     )
     parser.add_argument(
         "--app-config",
-        type=existing_file,
+        type=Path,
         help="Path to the app config file",
         default="configs/app.json",
     )
     parser.add_argument(
         "--spk-rate-config",
-        type=existing_file,
+        type=Path,
         help="Path to the speaking rate config file",
         default="configs/speaking_rate.json",
     )
     parser.add_argument(
         "--examples-config",
-        type=existing_file,
+        type=Path,
         help="Path to the examples config file",
         default="assets/examples.json",
     )
     args = parser.parse_args()
 
-    with open(args.config) as f:
-        config = SpeechGeneratorConfig(**json.load(f))
+    config = load_generator_config(args.config)
+    spk_rate_config = load_speaking_rate_config(args.spk_rate_config)
 
-    with open(args.spk_rate_config) as f:
-        spk_rate_config = json.load(f)
+    app_config = load_app_config(resolve_data_path(args.app_config, "configs/app.json"))
 
-    app_config = load_app_config(args.app_config)
-
-    with open(args.examples_config) as f:
+    with resolve_data_path(args.examples_config, "assets/examples.json").open() as f:
         examples_config = json.load(f)
     demo_examples = examples_config.get("examples", [])
 
@@ -457,53 +463,54 @@ def main():
 
         buffer = []
         buffer_len = 0
-        total_buffer = []
+        file_path = f"/tmp/voxtream_{uuid.uuid4().hex}.wav"
         stopped = False
 
-        stream_iter = iter(stream)
-        while True:
-            if not generation_control.wait_if_paused():
-                stopped = True
-                break
-            try:
-                frame, _, progress = next(stream_iter)
-            except StopIteration:
-                break
-            if generation_control.is_stopped():
-                stopped = True
-                break
-
-            buffer.append(frame)
-            total_buffer.append(frame)
-            buffer_len += frame.shape[0]
-            plot_update, text_update = visualization.update(progress)
-
-            if buffer_len >= chunk_size:
+        with sf.SoundFile(file_path, "w", samplerate=config.mimi_sr, channels=1) as output_file:
+            stream_iter = iter(stream)
+            while True:
+                if not generation_control.wait_if_paused():
+                    stopped = True
+                    break
+                try:
+                    frame, progress = _progress_frame(next(stream_iter))
+                except StopIteration:
+                    break
                 if generation_control.is_stopped():
                     stopped = True
                     break
-                audio = np.concatenate(buffer)
-                stream_seq += 1
-                yield (
-                    gr.update(),
-                    gr.update(),
-                    plot_update,
-                    text_update,
-                    render_audio_stream(
-                        app_config,
-                        session_id=stream_session_id,
-                        seq=stream_seq,
-                        sample_rate=config.mimi_sr,
-                        audio=float32_to_int16(audio),
-                        active=True,
-                    ),
-                    *generation_button_updates(
-                        running=True, paused=generation_control.is_paused()
-                    ),
-                )
 
-                buffer = []
-                buffer_len = 0
+                output_file.write(frame)
+                buffer.append(frame)
+                buffer_len += frame.shape[0]
+                plot_update, text_update = visualization.update(progress)
+
+                if buffer_len >= chunk_size:
+                    if generation_control.is_stopped():
+                        stopped = True
+                        break
+                    audio = np.concatenate(buffer)
+                    stream_seq += 1
+                    yield (
+                        gr.update(),
+                        gr.update(),
+                        plot_update,
+                        text_update,
+                        render_audio_stream(
+                            app_config,
+                            session_id=stream_session_id,
+                            seq=stream_seq,
+                            sample_rate=config.mimi_sr,
+                            audio=float32_to_int16(audio),
+                            active=True,
+                        ),
+                        *generation_button_updates(
+                            running=True, paused=generation_control.is_paused()
+                        ),
+                    )
+
+                    buffer = []
+                    buffer_len = 0
 
         stopped = stopped or generation_control.is_stopped()
         if stopped and hasattr(stream, "close"):
@@ -535,18 +542,7 @@ def main():
                 ),
             )
 
-        if len(total_buffer) > 0:
-            full_audio = np.concatenate(total_buffer)
-            nfade = min(
-                int(config.mimi_sr * app_config.fade_out_sec), full_audio.shape[0]
-            )
-            if nfade > 0:
-                fade = np.linspace(1.0, 0.0, nfade, dtype=np.float32)
-                full_audio[-nfade:] *= fade
-
-            file_path = f"/tmp/voxtream_{uuid.uuid4().hex}.wav"
-            sf.write(file_path, float32_to_int16(full_audio), config.mimi_sr)
-
+        if Path(file_path).exists() and Path(file_path).stat().st_size > 0:
             speaking_rate_state.stop()
             generation_control.finish()
             yield (

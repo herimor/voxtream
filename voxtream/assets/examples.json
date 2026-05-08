@@ -1,0 +1,52 @@
+{
+  "examples": [
+    [
+      "assets/audio/english_male.wav",
+      "Full stream text-to-speech (TTS) for interactive systems must start speaking with minimal delay while remaining controllable as text arrives incrementally. The voice should keep a natural rhythm as each new phrase becomes available. This helps assistants respond quickly while still sounding calm and clear. Careful streaming design makes spoken interaction feel more direct and responsive. It also reduces long silent gaps during complex replies. The listener hears progress while the system continues planning the next phrase."
+    ],
+    [
+      "assets/audio/english_female.wav",
+      "We present VoXtream2, a zero shot full stream text-to-speech (TTS) model with dynamic speaking rate control that can be updated during an utterance. The system can shift its pace while speech is already being produced. This allows a speaker to slow down for difficult content or move faster through simple phrases. Flexible control supports more expressive and useful speech generation. It also lets applications adapt delivery to user attention and context. The same voice can sound measured, concise, or relaxed as needed."
+    ],
+    [
+      "assets/audio/chinese_female.wav",
+      "VoXtream2 combines distribution matching over duration states with classifier free guidance across conditioning signals to improve controllability and synthesis quality. These methods help the model follow timing instructions more reliably. They also preserve natural voice quality when several controls are active. The result is speech that can be guided without sounding rigid or unstable. Better alignment between text, timing, and voice style makes each output easier to shape."
+    ],
+    [
+      "assets/audio/hindi_male.wav",
+      "Prompt text masking enables textless audio prompting, removing the need for prompt transcription. A user can provide a short voice reference without writing down what was said. This makes voice adaptation easier when transcripts are missing or expensive to prepare. The model can still learn useful speaker cues from the audio prompt. It can focus on tone, accent, and speaking style while ignoring unavailable words. This lowers setup effort for demos, research samples, and personal voice interfaces."
+    ],
+    [
+      "assets/audio/spanish_male.wav",
+      "Across standard zero shot benchmarks and a dedicated speaking rate test set, VoXtream2 achieves competitive objective and subjective results against public baselines. The evaluation covers both measured accuracy and human listening preference. Strong results suggest that streaming control does not require a large loss in quality. This makes the approach practical for real conversational systems. Consistent performance across tests gives developers more confidence in deployment."
+    ],
+    [
+      "assets/audio/arabic_female.wav",
+      "In full stream mode, it runs 4 times faster than real time with 74 ms first packet latency on a consumer graphics processor. Low latency helps the system begin speaking before the full response is complete. Faster synthesis also leaves more room for other application work. These properties are important for smooth real time dialogue. Efficient generation can support busy products without requiring unusual hardware. It also makes testing easier because responses arrive quickly during iteration."
+    ],
+    [
+      "assets/audio/french_female.wav",
+      "It has long been argued that conversational agents must be able to generate speech incrementally. Human conversation often depends on quick turns and partial understanding. An agent that waits too long can make the exchange feel broken or unnatural. Incremental generation supports more fluid spoken interaction. It lets a system begin with a confident phrase while later content is still forming. This behavior can make spoken assistants feel attentive, present, and easier to interrupt."
+    ],
+    [
+      "assets/audio/japanese_male.wav",
+      "Japanese audio recording can be used to prepare the examples list for a future voice sample. The entry keeps the same format as the other language examples. English text makes the placeholder clear for contributors who review the file. The audio path can be updated once the final sample is created. The placeholder supports early testing of selection flows and ordering. It also makes room for future validation of playback, captions, and voice metadata. Reviewers can confirm the option appears correctly."
+    ],
+    [
+      "assets/audio/russian_female.wav",
+      "Recent progress in neural text-to-speech (TTS) synthesis has led to highly natural and intelligible speech generation. Modern models can produce voices with clear pronunciation and expressive prosody. These gains make synthetic speech useful in more demanding interactive settings. The next challenge is to keep that quality while adding fine grained control. Users expect a generated voice to remain stable when speed, style, or prompting changes. Robust models must balance realism, latency, and steering."
+    ],
+    [
+      "assets/audio/swedish_female.wav",
+      "However, most contemporary systems implicitly assume that speaking rate is static across an utterance, typically allowing only coarse, global control over speed. Real speakers often vary their pace within a single response. They may pause before important words or speed through familiar details. A useful speech system should support this kind of local timing control. This makes explanations clearer and keeps long replies from feeling flat. Local control also helps match emphasis to meaning."
+    ],
+    [
+      "assets/audio/portuguese_male.wav",
+      "Portuguese audio prompt can be used to test how the interface presents another language option. The example text stays in English while the entry reserves space for a future recording. This keeps the data structure ready for multilingual expansion. A final voice sample can later replace the placeholder path. The placeholder also helps verify menus, labels, and playback behavior before the asset exists. It gives reviewers a clear signal that Portuguese support is planned but not complete."
+    ],
+    [
+      "assets/audio/german_male.wav",
+      "German acoustic prompt can be used to check language selection and example ordering. The English text describes the expected role of the entry without adding translated content. This makes the placeholder easy to identify during development. A complete recording can be added when the voice asset is available. The entry can also reveal layout issues in lists that include many languages. It keeps the example set balanced while the final German sample is prepared. Reviewers can test the flow early."
+    ]
+  ]
+}

@@ -28,17 +28,17 @@ def get_llama3_2(
 
 
 MODEL_POOL = {
-    "phone_former": get_llama3_2(
+    "phone_former": lambda: get_llama3_2(
         num_layers=6, num_heads=8, num_kv_heads=2, embed_dim=1024, intermediate_dim=4096
     ),
-    "temp_former": get_llama3_2(
+    "temp_former": lambda: get_llama3_2(
         num_layers=12,
         num_heads=16,
         num_kv_heads=4,
         embed_dim=1024,
         intermediate_dim=4096,
     ),
-    "dep_former_csm": get_llama3_2(
+    "dep_former_csm": lambda: get_llama3_2(
         num_layers=4, num_heads=8, num_kv_heads=2, embed_dim=1024, intermediate_dim=8192
     ),
 }

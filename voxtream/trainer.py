@@ -28,7 +28,11 @@ class Trainer(L.LightningModule):
         self.model = Model(model_config, config.compile_forward)
 
         if config.model_weight_path is not None:
-            weights = torch.load(config.model_weight_path, map_location="cpu")
+            weights = torch.load(
+                config.model_weight_path,
+                map_location="cpu",
+                weights_only=True,
+            )
             state_dict = {}
             # Remove torch lightning 'model.' prefix
             for k, v in weights["state_dict"].items():

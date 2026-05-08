@@ -4,6 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 license-files = ["LICENSE"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+voxtream = [
+  "configs/*.json",
+  "assets/*.json",
+  "assets/audio/*.wav",
+  "assets/benchmark/*.csv",
+  "assets/test/*.wav",
+  "assets/test/*.npy",
+]
 
 [project]
 name = "voxtream"
@@ -55,6 +66,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+server = ["fastapi", "uvicorn"]
+client = ["websockets", "sounddevice"]
+benchmark = ["pandas", "tqdm"]
 dev = ["black", "isort", "flake8", "mypy", "pytest"]
 
 [project.urls]
