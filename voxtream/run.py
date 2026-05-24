@@ -1,7 +1,10 @@
 import argparse
 import json
+import warnings
 from itertools import repeat
 from pathlib import Path
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 import numpy as np
 import soundfile as sf

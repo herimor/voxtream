@@ -1,7 +1,10 @@
 import argparse
 import json
 import uuid
+import warnings
 from pathlib import Path
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 import gradio as gr
 import numpy as np

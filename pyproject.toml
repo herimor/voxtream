@@ -7,7 +7,7 @@ license-files = ["LICENSE"]
 
 [project]
 name = "voxtream"
-version = "0.2.3"
+version = "0.2.4"
 description = "Full-Stream Zero-shot TTS model with Extremely Low Latency and Speaking-rate Control"
 readme = "README.md"
 license = { text = "MIT" }
@@ -32,11 +32,11 @@ classifiers = [
 
 # install_requires (from requirements.txt)
 dependencies = [
-  "torch==2.4.0",
-  "torchaudio==2.4.0",
+  "torch>=2.4,<2.9",
+  "torchaudio>=2.4,<2.9",
   "torchtune==0.4.0",
   "torchao==0.9.0",
-  "moshi==0.2.11",
+  "moshi>=0.2.13",
   "transformers==4.50.0",
   "huggingface_hub==0.28.1",
   "g2p-en==2.1.0",
