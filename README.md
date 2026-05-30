@@ -42,7 +42,7 @@ pip install -r requirements.txt
 
 #### Output streaming
 ```bash
-voxtream \
+python voxtream/run.py \
     --prompt-audio assets/audio/english_male.wav \
     --text "In general, some method is then needed to evaluate each approximation." \
     --output "output_stream.wav"
@@ -50,7 +50,7 @@ voxtream \
 
 #### Full streaming (slow speech, 2 syllables per second)
 ```bash
-voxtream \
+python voxtream/run.py \
     --prompt-audio assets/audio/english_female.wav \
     --text "Staff do not always do enough to prevent violence." \
     --output "full_stream_2sps.wav" \
@@ -60,7 +60,7 @@ voxtream \
 
 #### Acoustic prompt enhancement
 ```bash
-voxtream \
+python voxtream/run.py \
     --prompt-audio assets/test/english_male.wav \
     --text "In general, however, some method is then needed to evaluate each approximation." \
     --output "output_enhanced.wav" \
