@@ -1,31 +1,12 @@
-# VoXtream2: Full-stream TTS with dynamic speaking rate control
-
-[![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/pdf/2603.13518)
-[![Model](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Model-yellow)](https://huggingface.co/herimor/voxtream2)
-<!-- [![Demo page](https://img.shields.io/badge/VoXtream2-Demo_page-red)](https://herimor.github.io/voxtream2) -->
-<!-- [![Live demo](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Live_demo-yellow)](https://huggingface.co/spaces/herimor/voxtream2) -->
+# Full-stream TTS with dynamic speaking rate control via duration distribution guidance
 
 We present VoXtream2, a zero-shot full-stream TTS model with dynamic speaking-rate control that can be updated mid-utterance on the fly.
-
-For audio examples, see our [demo page](https://herimor.github.io/voxtream2).
-
-Try VoXtream2 in your browser on HuggingFace 🤗 [space](https://huggingface.co/spaces/herimor/voxtream2).
 
 ## Key features
 
 - **Dynamic speed control**: Distribution matching and Classifier-free guidance allow for a fine-grained speaking rate control, which can be adjusted as the model generates speech.
 - **Streaming performance**: Works **4x** times faster than real-time and achieves **74 ms** first packet latency in a full-stream on a consumer GPU.
 - **Translingual capability**: Prompt text masking enables support of acoustic prompts in any language.
-
-## Updates
-
-- `2026/04/30`:
-    - Added a dynamic speaking rate control interactive demo. You can now adjust the speaking rate as the model produces speech in real-time. Run `voxtream-app` locally after installing the package or check our HuggingFace [space](https://huggingface.co/spaces/herimor/voxtream2).
-    - Added cache reset in SynkAttention. Fixed the bug that caused the model to generate noise by relying on an invalid prompt cache.
-- `2026/04/08`: Added a frame repeat counter. Reduces hallucinations caused by models getting stuck in the same frame. Controlled by the `frame_repeat_counter` parameter in `SpeechGeneratorConfig`. Recommended value (12-25), lower values for stricter control.
-- `2026/03`: We released VoXtream2.
-- `2026/01`: VoXtream is accepted for an oral presentation at ICASSP 2026.
-- `2025/09`: We released VoXtream. Now available at [voxtream](https://github.com/herimor/voxtream/tree/voxtream) branch.
 
 ## Installation
 
@@ -40,9 +21,9 @@ yum install espeak-ng
 brew install espeak-ng
 ```
 
-### Pip package
+### Pip packages
 ```bash
-pip install "voxtream>=0.2.3"
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -56,7 +37,6 @@ pip install "voxtream>=0.2.3"
 * The model requires 2.2Gb of VRAM (enabling speech enhancement adds 2Gb).
 * Maximum generation length is limited to 1 minute.
 * The initial run may take a bit longer to download model weights and warmup model graph.
-* If you experience problems with CUDAGraphs please check this [issue](https://github.com/herimor/voxtream/issues/8).
 
 ### Command line
 
@@ -156,7 +136,7 @@ It sends a path to the audio prompt and a text to the server and immediately pla
 
 ### Evaluation
 
-To reproduce evaluation metrics from the paper check [evaluation](voxtream/utils/test/README.md) section.
+To reproduce evaluation metrics from the paper check `voxtream/utils/test/README.md` section.
 
 ## Training
 
@@ -174,7 +154,7 @@ GPU_IDS=0,1 docker-compose -f .devcontainer/docker-compose.yaml run voxtream pyt
 
 ### Custom dataset
 
-To prepare a custom training dataset check [dataset](voxtream/utils/dataset/README.md) section.
+To prepare a custom training dataset check `voxtream/utils/dataset/README.md` section.
 
 ## Benchmark
 
@@ -197,31 +177,6 @@ The Depth Transformer component from SesameAI-CSM is included under the Apache 2
 
 The model weights were trained on data licensed under the Creative Commons Attribution 4.0 International (CC BY 4.0). Redistribution of the weights must include proper attribution to the original dataset creators (see ATTRIBUTION.md).
 
-## Acknowledgements
-
-- [Mimi](https://huggingface.co/kyutai/mimi): Streaming audio codec from [Kyutai](https://kyutai.org)
-- [CSM](https://github.com/SesameAILabs/csm): Conversation speech model from [Sesame](https://sesame.com)
-- [ReDimNet](https://github.com/IDRnD/redimnet): Speaker recognition model from [IDR&D](https://idrnd.ai)
-- [Sidon](https://github.com/sarulab-speech/Sidon): Speech enhancemnet model from [SaruLab](https://sp.ipc.i.u-tokyo.ac.jp/index-en)
-
-## Citation
-```
-@inproceedings{torgashov2026voxtream,
-  title={Vo{X}tream: Full-Stream Text-to-Speech with Extremely Low Latency},
-  author={Torgashov, Nikita and Henter, Gustav Eje and Skantze, Gabriel},
-  booktitle={Proc. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)},
-  year={2026},
-  note={to appear},
-  url={https://arxiv.org/abs/2509.15969}
-}
-
-@article{torgashov2026voxtream2,
-  author    = {Torgashov, Nikita and Henter, Gustav Eje and Skantze, Gabriel},
-  title     = {Vo{X}tream2: Full-stream TTS with dynamic speaking rate control},
-  journal   = {arXiv:2603.13518},
-  year      = {2026}
-}
-```
 
 ## Disclaimer
 Any organization or individual is prohibited from using any technology mentioned in this paper to generate someone's speech without his/her consent, including but not limited to government leaders, political figures, and celebrities. If you do not comply with this item, you could be in violation of copyright laws.

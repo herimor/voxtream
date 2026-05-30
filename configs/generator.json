@@ -11,7 +11,7 @@
     "topk": 5,
     "top_p": 0.9,
     "max_audio_length_ms": 60000,
-    "model_repo": "herimor/voxtream2",
+    "model_repo": "voxtream2/model",
     "model_name": "model.safetensors",
     "model_config_name": "config.json",
     "mimi_sr": 24000,

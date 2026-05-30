@@ -4,8 +4,8 @@ hydra:
   output_subdir: null
 
 exp_name: voxtream_train
-model_repo: herimor/voxtream2
-dataset_repo: herimor/voxtream2-train
+model_repo: voxtream2/model
+dataset_repo: voxtream2/train
 dataset_base_dir: null
 dep_former_name: dep_former_csm.safetensors
 dep_former_weight_path: null

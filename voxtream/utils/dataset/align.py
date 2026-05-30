@@ -76,7 +76,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    phoneme_dict_path = hf_hub_download("herimor/voxtream2", "phoneme_to_token.json")
+    phoneme_dict_path = hf_hub_download("voxtream2/model", "phoneme_to_token.json")
     with open(phoneme_dict_path) as f:
         phone_to_idx = json.loads(f.read())
 

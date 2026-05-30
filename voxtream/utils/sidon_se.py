@@ -6,7 +6,6 @@ Paper: https://arxiv.org/pdf/2509.17052
 Uses a pure-PyTorch re-implementation of the SeamlessM4T / w2v-bert-2.0
 feature extractor (originally from w2vb2.py) instead of the slow
 HuggingFace numpy-based pipeline.
-Thanks @vanIvan for implementing.
 """
 
 import logging

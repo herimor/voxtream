@@ -18,7 +18,7 @@ from voxtream.utils.test.utmos import main as utmos
 
 
 def load_emilia_spk_rate_test(prompt_ext: str = "flac"):
-    dataset_dir = snapshot_download("herimor/voxtream2-test", repo_type="dataset")
+    dataset_dir = snapshot_download("voxtream2/test", repo_type="dataset")
     dataset_dir = Path(dataset_dir) / "test"
     meta_path = dataset_dir / "metadata.csv"
     protocol = pd.read_csv(meta_path)
