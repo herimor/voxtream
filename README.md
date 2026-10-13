@@ -195,7 +195,7 @@ The code in this repository is provided under the MIT License.
 
 The Depth Transformer component from SesameAI-CSM is included under the Apache 2.0 License (see LICENSE-APACHE and NOTICE).
 
-The model weights were trained on data licensed under the Creative Commons Attribution 4.0 International (CC BY 4.0). Redistribution of the weights must include proper attribution to the original dataset creators (see ATTRIBUTION.md).
+The model weights were trained on data licensed under the Creative Commons Attribution 4.0 International (CC BY 4.0 for HiFiTTS2) and Creative Commons Attribution Non Commercial 4.0 (CC BY-NC 4.0 for Emilia). Redistribution of the weights must include proper attribution to the original dataset creators (see ATTRIBUTION.md).
 
 ## Acknowledgements
 
