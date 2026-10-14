@@ -13,6 +13,7 @@
     "max_audio_length_ms": 60000,
     "model_repo": "herimor/voxtream2",
     "model_name": "model.safetensors",
+    "model_weight_path": null,
     "model_config_name": "config.json",
     "mimi_sr": 24000,
     "mimi_vocab_size": 2048,

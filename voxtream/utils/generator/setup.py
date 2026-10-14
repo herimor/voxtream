@@ -37,10 +37,17 @@ def load_generator_model(
     model_config = ModelConfig(**model_config_params)
     model = Model(model_config)
 
-    model_weight_path = hf_hub_download(
-        config.model_repo, config.model_name, token=config.hf_token
-    )
-    state_dict = load_file(model_weight_path)
+    if config.model_weight_path is not None:
+        weights = torch.load(config.model_weight_path, map_location="cpu")
+        state_dict = {}
+        for k, v in weights["state_dict"].items():
+            k = k.replace("model.", "")
+            state_dict[k] = v
+    else:
+        model_weight_path = hf_hub_download(
+            config.model_repo, config.model_name, token=config.hf_token
+        )
+        state_dict = load_file(model_weight_path)
 
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     assert (

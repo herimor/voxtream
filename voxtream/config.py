@@ -18,6 +18,7 @@ class SpeechGeneratorConfig:
     max_audio_length_ms: int
     model_repo: str
     model_name: str
+    model_weight_path: str
     model_config_name: str
     mimi_sr: int
     mimi_vocab_size: int
