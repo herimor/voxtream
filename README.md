@@ -2,8 +2,6 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/pdf/2603.13518)
 [![Model](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Model-yellow)](https://huggingface.co/herimor/voxtream2)
-<!-- [![Demo page](https://img.shields.io/badge/VoXtream2-Demo_page-red)](https://herimor.github.io/voxtream2) -->
-<!-- [![Live demo](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-Live_demo-yellow)](https://huggingface.co/spaces/herimor/voxtream2) -->
 
 We present VoXtream2, a zero-shot full-stream TTS model with dynamic speaking-rate control that can be updated mid-utterance on the fly.
 
@@ -19,6 +17,7 @@ Try VoXtream2 in your browser on HuggingFace 🤗 [space](https://huggingface.co
 
 ## Updates
 
+- `2026/10`: Updated speaking rate control mechanism. Released new checkpoints [VoXtream2.1](https://huggingface.co/herimor/voxtream2.1) with improved objective metrics.
 - `2026/04/30`:
     - Added a dynamic speaking rate control interactive demo. You can now adjust the speaking rate as the model produces speech in real-time. Run `voxtream-app` locally after installing the package or check our HuggingFace [space](https://huggingface.co/spaces/herimor/voxtream2).
     - Added cache reset in SynkAttention. Fixed the bug that caused the model to generate noise by relying on an invalid prompt cache.
@@ -157,6 +156,14 @@ It sends a path to the audio prompt and a text to the server and immediately pla
 ### Evaluation
 
 To reproduce evaluation metrics from the paper check [evaluation](voxtream/utils/test/README.md) section.
+
+Zero-shot TTS performance on SEED test-en set:
+
+| Model   | WER (%)           | SPK-SIM | UTMOS   |
+| :-:     | :-:                | :-:     | :-:   |
+| [VoXtream](https://huggingface.co/herimor/voxtream)       | 3.24 | 0.524 | 3.92 |
+| [VoXtream2](https://huggingface.co/herimor/voxtream2)     | 1.45 | 0.679 | 3.56 |
+| [VoXtream2.1](https://huggingface.co/herimor/voxtream2.1) | 1.32 | 0.682 | 3.78 |
 
 ## Training
 

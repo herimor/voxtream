@@ -91,18 +91,16 @@ def sample_semantic_token(
         joint_logits_2d_cfg = joint_logits_2d
 
     spk_rate_logits = torch.logsumexp(joint_logits_2d, dim=-1)
-    spk_rate_probs = torch.nn.functional.softmax(
-        spk_rate_logits / config.temperature, dim=-1
-    )
-
-    # exp(beta * (ln(P_target) - ln(P_accumulated))) * P_current
     if target_spk_rate_cnt is not None:
-        target_spk_rate_dist = target_spk_rate_cnt / target_spk_rate_cnt.sum()
-        cur_spk_rate_dist = cur_spk_rate_cnt / cur_spk_rate_cnt.sum()
-        distance = torch.log10(target_spk_rate_dist) - torch.log10(cur_spk_rate_dist)
-        spk_rate_shift = torch.exp(spk_rate_weight * distance)
-        spk_rate_probs = spk_rate_probs * spk_rate_shift.unsqueeze(0)
-        spk_rate_probs = spk_rate_probs / spk_rate_probs.sum(dim=-1, keepdim=True)
+        target_spk_rate_dist = torch.log(target_spk_rate_cnt / target_spk_rate_cnt.sum())
+        cur_spk_rate_dist = torch.log(cur_spk_rate_cnt / cur_spk_rate_cnt.sum())
+        spk_rate_guided = spk_rate_logits + spk_rate_weight * target_spk_rate_dist - spk_rate_weight * cur_spk_rate_dist
+    else:
+        spk_rate_guided = spk_rate_logits
+    
+    spk_rate_probs = torch.nn.functional.softmax(
+        spk_rate_guided / config.temperature, dim=-1
+    )
 
     spk_rate_token = sample_top_p(spk_rate_probs, config.top_p)
     if cur_spk_rate_cnt is not None:

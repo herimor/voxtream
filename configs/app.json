@@ -15,8 +15,8 @@
     "plot_x_tick_sec": 1,
     "audio_stream_start_delay_sec": 0.12,
     "audio_stream_sample_rate": 24000,
-    "speaking_rate_min": 1.0,
-    "speaking_rate_max": 7.0,
+    "speaking_rate_min": 2.0,
+    "speaking_rate_max": 6.0,
     "speaking_rate_step": 0.1,
     "speaking_rate_default": 4.0,
     "min_streaming_rtf": 0.95
