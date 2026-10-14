@@ -45,50 +45,85 @@ abbreviations_en = [
     for key, replacement in pairs
 ]
 
-# Symbols to REPLACE (with specific substitutes)
-punct_replacements = {
-    # comma-like
-    "...": ", ",
-    "…": ", ",
-    ":": ",",
-    " - ": ", ",
-    ";": ", ",
-    " ,": ",",
-    "、": ",",
-    "，": ",",
-    # full stop-like
-    "..": ". ",
-    " .": ".",
-    "？": "?",
-    "！": "!",
-    "。": ".",
-    # dashes to space
-    "—": " ",
-    "-": " ",
-    "ー": " ",
-    "一": " ",
-    "–": " ",
-    "‘": "'",
-    "’": "'",
-}
+# Target punctuation alphabet (by training-data frequency): . , ? ! ' -
+# Everything else is folded onto it, expanded, or stripped.
 
-# Symbols to REMOVE entirely
-punct_removal = ["“", "”", "«", "»", '"', "#", "*", "_", "{", "}", "¡", "¿", "|", "~"]
-# TODO: keep dashes -> hyphen, replace underscores with space, keep quotation marks
+# Single-character folds: applied in one pass via str.translate, so they are
+# order-independent (unlike the old single |-joined regex, where " ." could
+# fire before "...").
+_char_map = str.maketrans(
+    {
+        # CJK / fullwidth / Arabic sentence punctuation -> ASCII
+        "。": ".",
+        "？": "?",
+        "！": "!",
+        "、": ",",
+        "，": ",",
+        "،": ",",
+        "：": ":",
+        "；": ";",
+        # ellipsis characters -> ASCII dots (unified with the dot-run rule)
+        "…": "...",
+        "‥": "..",
+        # apostrophe lookalikes -> ASCII
+        "‘": "'",
+        "’": "'",
+        "‚": "'",
+        "‛": "'",
+        # dash variants fold to the canonical hyphen-minus; the dash itself is
+        # a kept token. "一" (U+4E00) is the CJK word "one", NOT a dash.
+        "—": "-",
+        "–": "-",
+        "―": "-",
+        "‒": "-",
+        "‑": "-",
+        "−": "-",
+        "־": "-",
+        # primes (feet/inches vs arc-minutes/seconds is ambiguous, so don't
+        # expand; a space keeps 5′10″ from collapsing into "510")
+        "′": " ",
+        "″": " ",
+        # backslash is a separator, like underscore
+        "\\": " ",
+        # katakana prolonged sound mark: silent in an English normalizer
+        "ー": None,
+        # underscore is a word separator (snake_case -> snake case)
+        "_": " ",
+    }
+)
 
-# Build a single regex for replacements
-replace_pattern = re.compile("|".join(map(re.escape, punct_replacements.keys())))
-remove_pattern = re.compile("[" + re.escape("".join(punct_removal)) + "]")
+# Symbols removed entirely (silent in speech). Single consolidated pass,
+# subsuming the old punct_removal list and remove_aux_symbols().
+_remove_re = re.compile(r'["“”„«»《》⟨⟩()\[\]{}<>*#•†‡‖§·・`¡¿|~]')
+
+# Contextual rules, applied as ordered, documented regex passes.
+_punct_rules = [
+    # Any run of 2+ dots is a pause: "Wait ..." / "So.....yeah" -> ", "
+    (re.compile(r"\.{2,}"), ", "),
+    # Colon -> comma, EXCEPT between digits: "3:30" must survive for
+    # expand_time_english (leftovers are swept after time expansion).
+    (re.compile(r"(?<!\d):(?!\d)"), ","),
+    # Semicolon is a pause
+    (re.compile(r";"), ","),
+    # A run of dashes is always a pause: "a--b" -> "a - b"
+    (re.compile(r"\s*-{2,}\s*"), " - "),
+    # A dash not joining word characters is a spaced pause token; intra-word
+    # hyphens ("well-known", "3-4") are kept.
+    (re.compile(r"(?<!\w)-|-(?!\w)"), " - "),
+    # Collapse repeated terminals: "!!!" -> "!", "?!" -> "?"
+    (re.compile(r"([!?])[!?]+"), r"\1"),
+    # No whitespace before pause/stop punctuation
+    (re.compile(r"\s+([.,!?])"), r"\1"),
+    # Dedupe stacked pause punctuation, even across spaces: first mark wins
+    (re.compile(r"([.,!?])(?:\s*[.,])+"), r"\1"),
+]
 
 
 def clean_punct(text: str) -> str:
-    # Replace mapped symbols
-    text = replace_pattern.sub(lambda m: punct_replacements[m.group(0)], text)
-    # Remove unwanted symbols
-    text = remove_pattern.sub("", text)
-
-    # Remove a comma if it follows .,!? or another comma
-    text = re.sub(r"([.,!?]),+", r"\1", text)
+    text = text.translate(_char_map)
+    text = _remove_re.sub("", text)
+    for pattern, repl in _punct_rules:
+        text = pattern.sub(repl, text)
     return text
 
 
@@ -118,11 +153,6 @@ def remove_emojis(text: str) -> str:
 
 def collapse_whitespace(text: str) -> str:
     return re.sub(_whitespace_re, " ", text).strip()
-
-
-def remove_aux_symbols(text: str) -> str:
-    text = re.sub(r"[\<\>\(\)\[\]\"]+", "", text)
-    return text
 
 
 def _normalize_internal_caps_word(match: re.Match[str]) -> str:
@@ -210,11 +240,18 @@ def english_normalizer(text: str) -> str:
     text = punct_norm(text)
     # text = lowercase(text)
     text = expand_time_english(text)
+    
+    # Colons between digits were kept for time expansion; anything left
+    # (scores like "2:1") is a pause. The space keeps "2, 1" from being
+    # read as a comma-grouped number by normalize_numbers.
+    text = text.replace(":", ", ")
+    # Convert dashes to commas, as they are not supported by the model yet
+    text = text.replace(" - ", ", ")
+
     text = normalize_numbers(text)
     text = expand_abbreviations(text)
     text = lower_internal_capitals(text)
     text = replace_symbols(text)
-    text = remove_aux_symbols(text)
     text = collapse_whitespace(text)
 
     return text
