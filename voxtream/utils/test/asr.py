@@ -102,9 +102,13 @@ def init_whisper_model(
         attention_mask = processed.get("attention_mask")
         if attention_mask is not None:
             attention_mask = attention_mask.to(device)
-        generate_kwargs = dict(language="english", task="transcribe", **WHISPER_FALLBACK)
+        generate_kwargs = dict(
+            language="english", task="transcribe", **WHISPER_FALLBACK
+        )
         if long_form:
-            generate_kwargs.update(return_timestamps=True, condition_on_prev_tokens=False)
+            generate_kwargs.update(
+                return_timestamps=True, condition_on_prev_tokens=False
+            )
         # Fallback samples at T > 0: seed per file so a transcript does not depend
         # on how many files were decoded before it.
         set_seed()
@@ -233,10 +237,10 @@ def main(
             print(f"Audio file is broken: {audio_path}")
             continue
 
-        if 'start' in row and 'end' in row:
+        if "start" in row and "end" in row:
             start_sample = int(row.start * sample_rate)
             end_sample = int(row.end * sample_rate)
-            audio = audio[start_sample: end_sample]
+            audio = audio[start_sample:end_sample]
 
         pred_text = transcribe(processor, model, audio, sr=sample_rate, device=device)
 

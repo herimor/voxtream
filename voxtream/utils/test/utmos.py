@@ -42,11 +42,11 @@ def main(
             signal, sr = sf.read(
                 (dataset_dir / row.path).with_suffix(f".{file_ext}"), dtype="float32"
             )
-            if 'start' in row and 'end' in row:
+            if "start" in row and "end" in row:
                 start_sample = int(row.start * sr)
                 end_sample = int(row.end * sr)
                 signal = signal[start_sample:end_sample]
-            
+
             with torch.no_grad():
                 score = model(torch.from_numpy(signal).unsqueeze(0).to(device), sr)
             scores.append(score.cpu().numpy()[0])

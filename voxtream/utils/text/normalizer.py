@@ -240,7 +240,7 @@ def english_normalizer(text: str) -> str:
     text = punct_norm(text)
     # text = lowercase(text)
     text = expand_time_english(text)
-    
+
     # Colons between digits were kept for time expansion; anything left
     # (scores like "2:1") is a pause. The space keeps "2, 1" from being
     # read as a comma-grouped number by normalize_numbers.

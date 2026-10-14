@@ -92,12 +92,18 @@ def sample_semantic_token(
 
     spk_rate_logits = torch.logsumexp(joint_logits_2d, dim=-1)
     if target_spk_rate_cnt is not None:
-        target_spk_rate_dist = torch.log(target_spk_rate_cnt / target_spk_rate_cnt.sum())
+        target_spk_rate_dist = torch.log(
+            target_spk_rate_cnt / target_spk_rate_cnt.sum()
+        )
         cur_spk_rate_dist = torch.log(cur_spk_rate_cnt / cur_spk_rate_cnt.sum())
-        spk_rate_guided = spk_rate_logits + spk_rate_weight * target_spk_rate_dist - spk_rate_weight * cur_spk_rate_dist
+        spk_rate_guided = (
+            spk_rate_logits
+            + spk_rate_weight * target_spk_rate_dist
+            - spk_rate_weight * cur_spk_rate_dist
+        )
     else:
         spk_rate_guided = spk_rate_logits
-    
+
     spk_rate_probs = torch.nn.functional.softmax(
         spk_rate_guided / config.temperature, dim=-1
     )
