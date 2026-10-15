@@ -12,6 +12,12 @@ from tqdm.auto import tqdm
 from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
 from voxtream.utils.generator import set_seed
 from voxtream.utils.test.asr import MODEL_POOL as ASR_MODELS, main as wer
+from voxtream.utils.test.speaking_rate import (
+    load_alignment,
+    main as speaking_rate_eval,
+    rate_iterator,
+    target_rate_frames,
+)
 from voxtream.utils.test.spk_sim import main as spk_sim
 from voxtream.utils.test.utmos import main as utmos
 
@@ -36,6 +42,16 @@ def load_seedtts_en_test(dataset_dir: Path, prompt_ext: str = "wav"):
     return dataset_dir, protocol, prompt_ext
 
 
+def load_seamless_test(prompt_ext: str = "flac"):
+    dataset_dir = snapshot_download("voxtream2/seamless", repo_type="dataset")
+    dataset_dir = Path(dataset_dir) / "test"
+    protocol = pd.read_csv(dataset_dir / "metadata.csv").rename(
+        columns={"audio_file_name": "path", "prompt_audio_file_name": "file_name"}
+    )
+
+    return dataset_dir, protocol, prompt_ext
+
+
 def main(
     dataset: str,
     output_dir: Path,
@@ -45,6 +61,7 @@ def main(
     file_ext: str,
     dataset_dir: Path = None,
     enhance_prompt: bool = False,
+    aligner_root: Path = None,
 ):
     set_seed()
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -60,6 +77,8 @@ def main(
         dataset_dir, protocol, prompt_ext = load_emilia_spk_rate_test()
     elif dataset == "seedtts-en":
         dataset_dir, protocol, prompt_ext = load_seedtts_en_test(dataset_dir, file_ext)
+    elif dataset == "seamless":
+        dataset_dir, protocol, prompt_ext = load_seamless_test()
     else:
         raise ValueError(f"Unsupported dataset: {dataset}")
 
@@ -72,12 +91,23 @@ def main(
         else:
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
+        if dataset == "seamless":
+            # Dynamic control: per-frame target rate from the reference alignment
+            rate_frames = target_rate_frames(
+                load_alignment(dataset_dir / row.path)["words"]
+            )
+            spk_rate = rate_iterator(rate_frames, config.audio_delay_frames)
+        elif speaking_rate is not None:
+            spk_rate = repeat(speaking_rate)
+        else:
+            spk_rate = None
+
         speech_stream = speech_generator.generate_stream(
             prompt_audio_path=(dataset_dir / row.file_name).with_suffix(
                 f".{prompt_ext}"
             ),
             text=row.text,
-            speaking_rate=repeat(speaking_rate) if speaking_rate is not None else None,
+            speaking_rate=spk_rate,
             enhance_prompt=enhance_prompt,
         )
 
@@ -103,6 +133,14 @@ def main(
         asr_model_name=asr_model_name,
         file_ext=file_ext,
     )
+    if dataset == "seamless" and aligner_root is not None:
+        speaking_rate_eval(
+            meta=protocol,
+            dataset_dir=output_dir,
+            reference_dir=dataset_dir,
+            aligner_root=aligner_root,
+            file_ext=file_ext,
+        )
 
 
 if __name__ == "__main__":
@@ -113,7 +151,7 @@ if __name__ == "__main__":
         type=str,
         help="Dataset name",
         default="voxtream2-test",
-        choices=["voxtream2-test", "seedtts-en"],
+        choices=["voxtream2-test", "seedtts-en", "seamless"],
     )
     parser.add_argument(
         "-dd",
@@ -132,7 +170,7 @@ if __name__ == "__main__":
         "-src",
         "--speaking-rate",
         type=float,
-        help="Speaking rate control",
+        help="Speaking rate control (ignored for seamless, which uses dynamic control)",
         default=None,
     )
     parser.add_argument(
@@ -160,6 +198,13 @@ if __name__ == "__main__":
         action="store_true",
         help="Enables prompt enhancement",
     )
+    parser.add_argument(
+        "-ar",
+        "--aligner-root",
+        type=str,
+        help="Path to forced-aligners-bench repo (seamless speaking rate metrics)",
+        default=None,
+    )
     args = parser.parse_args()
 
     main(
@@ -171,4 +216,5 @@ if __name__ == "__main__":
         file_ext=args.file_ext,
         dataset_dir=Path(args.dataset_dir) if args.dataset_dir else None,
         enhance_prompt=args.prompt_enhancement,
+        aligner_root=Path(args.aligner_root) if args.aligner_root else None,
     )

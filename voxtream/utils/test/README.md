@@ -20,4 +20,27 @@ Download dataset following [instructions](https://github.com/BytedanceSpeech/see
 python run.py -d seedtts-en -dd /path/to/seedtts_testset/en -o /path/to/output/directory --prompt-enhancement
 ```
 
+### Seamless (dynamic speaking rate)
+
+The dataset will be downloaded automatically. The speaking rate is changed every 80 ms frame following the per-word rate of the reference recording (clipped to [2-6] syllables per second), so `--speaking-rate` is ignored. Generation only needs the alignments shipped with the dataset:
+
+```bash
+python run.py -d seamless -o /path/to/output/directory
+```
+
+To also compute speaking rate metrics (Correlation and MAE between the reference and generated speaking-rate curves), the generated audio has to be aligned with the Seamless UnitY2 forced aligner. Clone the aligner repository and install its extra dependencies:
+
+```bash
+git clone https://github.com/PalabraAI/forced-aligners-bench
+pip install loguru overrides resampy sentencepiece matplotlib
+```
+
+Then pass the repository path to the test (aligner checkpoints will be downloaded on the first run):
+
+```bash
+python run.py -d seamless -o /path/to/output/directory --aligner-root /path/to/forced-aligners-bench
+```
+
+Correlation and MAE are computed between the reference and generated speaking-rate curves (80 ms frames, generated curve resampled to the reference length, both Gaussian-smoothed). Per-file scores are saved to `speaking_rate.csv` in the output directory.
+
 * Note: Make sure the `$PYTHONPATH` variable contains a repository root directory.
