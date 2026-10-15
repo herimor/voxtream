@@ -32,7 +32,9 @@ class GenerationContext:
     sidon_se: Any
     vad: Any
 
-    def prompt_kwargs(self, enhance_prompt: bool, apply_vad: bool) -> Dict[str, Any]:
+    def prompt_kwargs(
+        self, enhance_prompt: bool, apply_vad: bool, normalize_loudness: bool
+    ) -> Dict[str, Any]:
         return dict(
             config=self.config,
             logger=self.logger,
@@ -45,6 +47,7 @@ class GenerationContext:
             vad=self.vad,
             enhance_prompt=enhance_prompt,
             apply_vad=apply_vad,
+            normalize_loudness=normalize_loudness,
         )
 
 

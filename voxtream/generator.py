@@ -149,6 +149,7 @@ class SpeechGenerator:
         speaking_rate: Iterator[float] = None,
         enhance_prompt: bool = None,
         apply_vad: bool = None,
+        normalize_loudness: bool = None,
         return_progress: bool = False,
         min_streaming_rtf: float = None,
     ) -> Generator[
@@ -159,6 +160,11 @@ class SpeechGenerator:
             self.config.enhance_prompt if enhance_prompt is None else enhance_prompt
         )
         apply_vad = self.config.apply_vad if apply_vad is None else apply_vad
+        normalize_loudness = (
+            self.config.normalize_prompt_loudness
+            if normalize_loudness is None
+            else normalize_loudness
+        )
 
         (
             mimi_codes,
@@ -169,7 +175,9 @@ class SpeechGenerator:
         ) = prepare_prompt(
             prompt_audio_path=prompt_audio_path,
             **self.ctx.prompt_kwargs(
-                enhance_prompt=enhance_prompt, apply_vad=apply_vad
+                enhance_prompt=enhance_prompt,
+                apply_vad=apply_vad,
+                normalize_loudness=normalize_loudness,
             ),
         )
 
