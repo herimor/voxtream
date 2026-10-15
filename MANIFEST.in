@@ -1,6 +1,0 @@
-include README.md
-include voxtream/VERSION
-include requirements.txt
-recursive-include assets *.wav
-recursive-include assets *.csv
-recursive-include configs *.json

@@ -82,7 +82,11 @@ def main(
     meta: pd.DataFrame | str | None = None,
     sample_rate: int = 16000,
     file_ext: str = "flac",
+    reference_ext: str | None = None,
 ):
+    # The prompts may be stored in another format than the generated audio
+    # (e.g. WAV prompts, FLAC outputs); by default both share `file_ext`.
+    reference_ext = reference_ext or file_ext
     save_path = dataset_dir / "spk_sim.txt"
     if save_path.exists():
         with open(save_path) as f:
@@ -123,7 +127,7 @@ def main(
         templates_map: dict[str, list[Any]] = {"ref": [], "file": []}
         for path, prompt_path in meta_df[["path", "file_name"]].values:
             audio_prompt_path = (reference_dir / prompt_path).with_suffix(
-                f".{file_ext}"
+                f".{reference_ext}"
             )
             prompt_path = (reference_dir / prompt_path).with_suffix(f".{emb_ext}")
 
@@ -184,6 +188,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "-e", "--file-ext", type=str, help="File extension", default="flac"
     )
+    parser.add_argument(
+        "-re",
+        "--reference-ext",
+        type=str,
+        help="File extension of the reference prompts (default: same as --file-ext)",
+        default=None,
+    )
 
     args = parser.parse_args()
 
@@ -193,4 +204,5 @@ if __name__ == "__main__":
         reference_dir=Path(args.reference_dir) if args.reference_dir else None,
         meta=args.meta_path,
         file_ext=args.file_ext,
+        reference_ext=args.reference_ext,
     )

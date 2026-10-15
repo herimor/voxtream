@@ -1,7 +1,8 @@
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
 import numpy as np
+import pyloudnorm as pyln
 import torch
 import torchaudio
 from moshi.models import MimiModel
@@ -10,6 +11,51 @@ from torchaudio.transforms import Resample
 
 from voxtream.config import SpeechGeneratorConfig
 from voxtream.utils.generator.helpers import autocast_ctx
+
+_LOUDNESS_METERS: Dict[int, pyln.Meter] = {}
+
+
+def normalize_prompt_loudness(
+    waveform: torch.Tensor,
+    sample_rate: int,
+    target_lufs: float,
+    logger=None,
+) -> torch.Tensor:
+    """Normalize the acoustic prompt to a fixed integrated loudness (ITU-R BS.1770)."""
+    if sample_rate not in _LOUDNESS_METERS:
+        _LOUDNESS_METERS[sample_rate] = pyln.Meter(sample_rate)
+    meter = _LOUDNESS_METERS[sample_rate]
+
+    if waveform.shape[1] < int(meter.block_size * sample_rate):
+        if logger:
+            logger.warning(
+                f"Prompt audio is shorter than the {meter.block_size:.1f} s loudness "
+                f"block size; skipping loudness normalization."
+            )
+        return waveform
+
+    signal = waveform.squeeze(0).to(dtype=torch.float32).cpu().numpy()
+    loudness = meter.integrated_loudness(signal)
+    if not np.isfinite(loudness):
+        if logger:
+            logger.warning(
+                "Prompt audio loudness is not measurable (silent audio); "
+                "skipping loudness normalization."
+            )
+        return waveform
+
+    signal = pyln.normalize.loudness(signal, loudness, target_lufs)
+
+    peak = float(np.max(np.abs(signal)))
+    if peak > 1.0:
+        if logger:
+            logger.debug(
+                f"Loudness-normalized prompt peaks at {peak:.2f}; "
+                f"rescaling to avoid clipping."
+            )
+        signal /= peak
+
+    return torch.from_numpy(signal).unsqueeze(0).to(dtype=waveform.dtype)
 
 
 def encode_audio_prompt(
@@ -126,6 +172,7 @@ def prepare_prompt(
     vad: torch.nn.Module,
     enhance_prompt: bool = None,
     apply_vad: bool = None,
+    normalize_loudness: bool = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     prompt_path = prompt_audio_path.parent / f"{prompt_audio_path.stem}.prompt.npy"
     if config.cache_prompt and prompt_path.exists():
@@ -141,6 +188,14 @@ def prepare_prompt(
                 f"Prompt audio has {waveform.shape[0]} channels; converting to mono by averaging."
             )
             waveform = waveform.mean(dim=0, keepdim=True)
+
+        if normalize_loudness:
+            waveform = normalize_prompt_loudness(
+                waveform,
+                sample_rate=orig_sr,
+                target_lufs=config.prompt_loudness_lufs,
+                logger=logger,
+            )
 
         waveform_16k = None
         if apply_vad:

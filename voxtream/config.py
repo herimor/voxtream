@@ -18,6 +18,7 @@ class SpeechGeneratorConfig:
     max_audio_length_ms: int
     model_repo: str
     model_name: str
+    model_weight_path: str
     model_config_name: str
     mimi_sr: int
     mimi_vocab_size: int
@@ -53,3 +54,5 @@ class SpeechGeneratorConfig:
     min_speech_seg_sec: float
     min_look_ahead_phones: int
     frame_repeat_counter: int
+    normalize_prompt_loudness: bool
+    prompt_loudness_lufs: float

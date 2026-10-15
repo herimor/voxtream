@@ -37,16 +37,21 @@ def main(
     model.eval()
 
     scores = []
-    for path in tqdm(meta.path, desc="Evaluating with UTMOS"):
+    for _, row in tqdm(list(meta.iterrows()), desc="Evaluating with UTMOS"):
         try:
             signal, sr = sf.read(
-                (dataset_dir / path).with_suffix(f".{file_ext}"), dtype="float32"
+                (dataset_dir / row.path).with_suffix(f".{file_ext}"), dtype="float32"
             )
+            if "start" in row and "end" in row:
+                start_sample = int(row.start * sr)
+                end_sample = int(row.end * sr)
+                signal = signal[start_sample:end_sample]
+
             with torch.no_grad():
                 score = model(torch.from_numpy(signal).unsqueeze(0).to(device), sr)
             scores.append(score.cpu().numpy()[0])
         except Exception:
-            print(f"Error processing {path}, skipping...")
+            print(f"Error processing {row.path}, skipping...")
             continue
 
     np.save(dataset_dir / "utmos_scores.npy", scores)
@@ -64,4 +69,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    main(meta=args.meta, dataset_dir=Path(args.dataset_dir))
+    main(meta=args.meta_path, dataset_dir=Path(args.dataset_dir))
