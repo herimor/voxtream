@@ -41,7 +41,7 @@ brew install espeak-ng
 
 ### Pip package
 ```bash
-pip install "voxtream>=0.2.3"
+pip install "voxtream>=0.2.5"
 ```
 
 ## Usage
