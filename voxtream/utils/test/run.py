@@ -11,8 +11,7 @@ from tqdm.auto import tqdm
 
 from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
 from voxtream.utils.generator import set_seed
-from voxtream.utils.test.asr import MODEL_POOL as ASR_MODELS
-from voxtream.utils.test.asr import main as wer
+from voxtream.utils.test.asr import MODEL_POOL as ASR_MODELS, main as wer
 from voxtream.utils.test.spk_sim import main as spk_sim
 from voxtream.utils.test.utmos import main as utmos
 
