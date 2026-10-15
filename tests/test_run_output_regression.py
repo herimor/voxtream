@@ -1,4 +1,6 @@
 import json
+import os
+import platform
 import sys
 from pathlib import Path
 
@@ -15,22 +17,24 @@ import voxtream.run as run
 def test_run_main_output_matches_reference(monkeypatch, tmp_path):
 
     device_name = "cuda" if torch.cuda.is_available() else "cpu"
+    # Sampling makes outputs diverge across CPU architectures / BLAS backends,
+    # so CPU fixtures are keyed by OS and architecture.
     fixture_name = (
         "reference_frames.npy"
         if device_name == "cuda"
-        else f"reference_frames_{device_name}.npy"
+        else f"reference_frames_cpu_{sys.platform}_{platform.machine().lower()}.npy"
     )
     fixture_path = REPO_ROOT / "assets" / "test" / fixture_name
     config_path = REPO_ROOT / "configs" / "generator.json"
+    update_fixture = os.environ.get("UPDATE_REGRESSION_FIXTURES") == "1"
 
-    if not fixture_path.exists():
+    if not update_fixture and not fixture_path.exists():
         raise FileNotFoundError(
             f"Missing regression fixture: {fixture_path}. "
-            f"Generate it on a {device_name.upper()} device using the run.py "
-            "regression invocation."
+            "Generate it on this machine with: "
+            "UPDATE_REGRESSION_FIXTURES=1 pytest tests/test_run_output_regression.py"
         )
 
-    expected_audio = np.load(fixture_path)
     with config_path.open() as f:
         config = json.load(f)
 
@@ -64,6 +68,9 @@ def test_run_main_output_matches_reference(monkeypatch, tmp_path):
     run.main()
 
     assert captured_write["path"] == str(output_path)
+    if update_fixture:
+        np.save(fixture_path, captured_write["data"])
+    expected_audio = np.load(fixture_path)
     assert captured_write["data"].shape == expected_audio.shape
     np.testing.assert_allclose(
         captured_write["data"], expected_audio, rtol=1e-5, atol=1e-6
