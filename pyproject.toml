@@ -50,6 +50,7 @@ dependencies = [
   "pydantic==2.10.6",
   "setuptools>=70,<81",
   "silero-vad==6.2.0",
+  "pyloudnorm==0.2.0",
   "jiwer==4.0.0",
   "openai-whisper==20250625"
 ]

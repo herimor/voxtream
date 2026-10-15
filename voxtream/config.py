@@ -54,3 +54,5 @@ class SpeechGeneratorConfig:
     min_speech_seg_sec: float
     min_look_ahead_phones: int
     frame_repeat_counter: int
+    normalize_prompt_loudness: bool
+    prompt_loudness_lufs: float

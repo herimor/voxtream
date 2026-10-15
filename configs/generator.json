@@ -42,6 +42,8 @@
     "reset_streaming_state": false,
     "hf_token": null,
     "apply_vad": false,
+    "normalize_prompt_loudness": true,
+    "prompt_loudness_lufs": -23.0,
     "min_speech_seg_sec": 0.3,
     "min_look_ahead_phones": 3,
     "phonemizer": "espeak",
