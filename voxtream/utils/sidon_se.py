@@ -14,6 +14,7 @@ import threading
 from typing import Optional, Union
 
 import numpy as np
+import soundfile as sf
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -529,7 +530,8 @@ class SidonSE:
         Returns:
             Enhanced waveform at 48 kHz, float32 numpy array.
         """
-        wav, sr = torchaudio.load(audio_path)
+        data, sr = sf.read(audio_path, dtype="float32", always_2d=True)
+        wav = torch.from_numpy(np.ascontiguousarray(data.T))
         return self(wav, sr=sr)
 
 

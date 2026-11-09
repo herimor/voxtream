@@ -10,6 +10,8 @@ import nltk
 import numpy as np
 import torch
 
+MAX_CPU_THREADS = 8
+
 DTYPE_MAP = {
     "cpu": torch.float32,
     "cuda": torch.bfloat16,
@@ -74,7 +76,8 @@ def configure_cpu_threads(
     torch_threads: int | None = None,
     inter_op_threads: int | None = None,
 ) -> tuple[int, int]:
-    cpu_threads = torch_threads or (os.cpu_count() or 1)
+    # More threads only add synchronisation overhead to the small per-frame ops
+    cpu_threads = torch_threads or min(os.cpu_count() or 1, MAX_CPU_THREADS)
     if cpu_threads <= 0:
         raise ValueError("torch_threads must be a positive integer")
 
@@ -84,7 +87,12 @@ def configure_cpu_threads(
         raise ValueError("inter_op_threads must be a positive integer")
 
     torch.set_num_threads(cpu_threads)
-    torch.set_num_interop_threads(inter_op_threads)
+    try:
+        torch.set_num_interop_threads(inter_op_threads)
+    except RuntimeError:
+        # the inter-op pool is sized once per process, before any parallel work:
+        # a second generator in the same process keeps the first one's setting
+        inter_op_threads = torch.get_num_interop_threads()
     os.environ["OMP_NUM_THREADS"] = str(cpu_threads)
     os.environ["MKL_NUM_THREADS"] = str(cpu_threads)
     os.environ["OPENBLAS_NUM_THREADS"] = str(cpu_threads)

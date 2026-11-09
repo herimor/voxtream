@@ -1,0 +1,88 @@
+{
+    "model_repo": "herimor/voxtream2.1",
+    "model_name": "model.safetensors",
+    "model_config_name": "config.json",
+    "phoneme_vocab_name": "phoneme_to_token.json",
+    "model_weight_path": null,
+    "model_config_path": null,
+    "phoneme_vocab_path": null,
+    "hf_token": null,
+    "num_codebooks": 16,
+    "audio_delay_frames": 1,
+    "audio_pad_token": 2049,
+    "mimi_sr": 24000,
+    "mimi_vocab_size": 2048,
+    "mimi_frame_ms": 80,
+    "mimi_repo": "kyutai/moshiko-pytorch-bf16",
+    "mimi_name": "tokenizer-e351c8d8-checkpoint125.safetensors",
+    "spk_enc_sr": 16000,
+    "spk_enc_repo": "IDRnD/ReDimNet:master",
+    "spk_enc_model": "ReDimNet",
+    "spk_enc_model_name": "M",
+    "spk_enc_train_type": "ft_mix",
+    "spk_enc_dataset": "vb2+vox2+cnc",
+    "max_prompt_sec": 20,
+    "min_prompt_sec": 1,
+    "cache_prompt": false,
+    "enhance_prompt": false,
+    "sidon_se_reload_model": false,
+    "apply_vad": false,
+    "min_speech_seg_sec": 0.3,
+    "normalize_prompt_loudness": true,
+    "prompt_loudness_lufs": -23.0,
+    "phonemizer": "espeak",
+    "max_phone_tokens": 2000,
+    "text_context": " context",
+    "text_context_length": 18,
+    "min_look_ahead_phones": 3,
+    "phone_kv_cache": false,
+    "phone_cache_len": 1024,
+    "temperature": 0.9,
+    "topk": 5,
+    "top_p": 0.9,
+    "cfg_gamma": 1.5,
+    "cfg_ac_gamma": 2.0,
+    "mog_cfg_gamma": null,
+    "phoneme_index_map": {
+        "0": [
+            0,
+            1
+        ],
+        "1": [
+            0,
+            2
+        ],
+        "2": [
+            1,
+            1
+        ],
+        "3": [
+            1,
+            2
+        ],
+        "4": [
+            2,
+            1
+        ],
+        "5": [
+            2,
+            2
+        ]
+    },
+    "num_phones_per_frame": 2,
+    "spk_rate_window_sec": 2.0,
+    "max_audio_length_ms": 60000,
+    "frame_repeat_counter": 25,
+    "final_phone_hold_frames": 3,
+    "start_retry_frames": 0,
+    "start_retry_attempts": 1,
+    "start_lead_in_frames": 1,
+    "stall_kicks": 2,
+    "audio_window_size": 375,
+    "prompt_attention_bias": 1.5,
+    "prompt_attention_bias_start_sec": 50.0,
+    "sink_tail_window_divisor": 8,
+    "gguf": false,
+    "gguf_dir": null,
+    "cpu_threads": null
+}

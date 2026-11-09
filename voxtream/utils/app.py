@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import threading
 import time
@@ -11,7 +12,9 @@ from typing import Any, Mapping
 
 import gradio as gr
 import numpy as np
+import soundfile as sf
 
+from voxtream.config import SpeechGeneratorConfig
 from voxtream.utils.generator.text import TextProgressMetadata
 
 CUSTOM_CSS = """
@@ -74,9 +77,13 @@ LOW_LATENCY_AUDIO_HEAD_TEMPLATE = """
 (() => {
   const START_DELAY_SEC = __START_DELAY_SEC__;
   const DEFAULT_SAMPLE_RATE = __DEFAULT_SAMPLE_RATE__;
+  // ramp at both edges of a gap in the queue, so that it opens and closes
+  // without a click
+  const FADE_SEC = 0.005;
   const state = {
     ctx: null,
     nextTime: 0,
+    lastGain: null,
     paused: false,
     session: null,
     seq: -1,
@@ -113,6 +120,7 @@ LOW_LATENCY_AUDIO_HEAD_TEMPLATE = """
     }
     state.sources = [];
     state.nextTime = 0;
+    state.lastGain = null;
   }
 
   function pausePlayback() {
@@ -177,17 +185,40 @@ LOW_LATENCY_AUDIO_HEAD_TEMPLATE = """
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
-    source.connect(ctx.destination);
+    const gain = ctx.createGain();
+    source.connect(gain);
+    gain.connect(ctx.destination);
     source.onended = () => {
       state.sources = state.sources.filter((item) => item !== source);
     };
 
-    const minStart = ctx.currentTime + START_DELAY_SEC;
-    if (!state.nextTime || state.nextTime < minStart) {
-      state.nextTime = minStart;
+    // Chunks are queued back to back. The queue is re-anchored only when it has
+    // run dry (or will within a fade): the first chunk of a session and every
+    // underrun start START_DELAY_SEC ahead, and that lead is the cushion that
+    // absorbs the jitter of the chunks after them. Every chunk fades out at its
+    // end unless the next one arrives in time to cancel the ramp, and a chunk
+    // that opens a gap fades in, so no gap starts or ends with a click.
+    const now = ctx.currentTime;
+    let afterGap = false;
+    if (!state.nextTime || state.nextTime < now + FADE_SEC) {
+      state.nextTime = now + START_DELAY_SEC;
+      afterGap = true;
+    } else if (state.lastGain) {
+      state.lastGain.gain.cancelScheduledValues(state.nextTime - FADE_SEC);
+      state.lastGain.gain.setValueAtTime(1, state.nextTime - FADE_SEC);
     }
-    source.start(state.nextTime);
-    state.nextTime += buffer.duration;
+    const start = state.nextTime;
+    const end = start + buffer.duration;
+    const fade = Math.min(FADE_SEC, buffer.duration / 2);
+    if (afterGap) {
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(1, start + fade);
+    }
+    gain.gain.setValueAtTime(1, end - fade);
+    gain.gain.linearRampToValueAtTime(0, end);
+    source.start(start);
+    state.nextTime = end;
+    state.lastGain = gain;
     state.sources.push(source);
   }
 
@@ -265,7 +296,17 @@ class AppConfig:
     speaking_rate_max: float
     speaking_rate_step: float
     speaking_rate_default: float
-    min_streaming_rtf: float
+    # pacing of the generator: a cap on how far ahead of the wall clock the audio
+    # may run (see `generate_stream`)
+    max_stream_lead_sec: float | None = None
+    # shortest interval between two updates of the page. The page keeps the latest
+    # value of the stream only and renders it when it gets to it, so an update that
+    # comes before the previous one was rendered is dropped, with the chunk it
+    # carries. Frames that arrive sooner than this after an update are merged into
+    # the next chunk, so a burst (the lead of `max_stream_lead_sec`, filled at the
+    # start and refilled after a slow frame) reaches the player as fewer, longer
+    # chunks rather than as updates it cannot keep up with
+    min_stream_update_sec: float = 0.0
 
 
 def load_app_config(path: str | Path) -> AppConfig:
@@ -830,7 +871,11 @@ def render_audio_stream(
     audio: np.ndarray | None = None,
     active: bool = False,
     final: bool = False,
+    status: str | None = None,
 ) -> str:
+    """The stream box: the player reads a chunk of audio off its data attributes, the
+    listener reads its status. `status` replaces the one `active` and `final` imply
+    (Ready, Playing, Complete) with the step of a generation that has no audio yet."""
     if sample_rate is None:
         sample_rate = app_config.audio_stream_sample_rate
 
@@ -841,7 +886,8 @@ def render_audio_stream(
             "ascii"
         )
 
-    status = "Complete" if final else ("Playing" if active else "Ready")
+    if status is None:
+        status = "Complete" if final else ("Playing" if active else "Ready")
     indicator_class = (
         "stream-indicator active" if active and not final else "stream-indicator"
     )
@@ -1022,3 +1068,145 @@ class GenerationControl:
             while self._paused and not self._stopped:
                 self._condition.wait(timeout=0.05)
             return not self._stopped
+
+
+class StageReporter:
+    """
+    Runs a blocking call on a worker thread and hands out the stages it reports
+    meanwhile, so a page can show the step a generation is at while the call runs.
+    The instance is the `on_stage` callback of the call.
+    """
+
+    def __init__(self):
+        self._stages: list[str] = []
+
+    def __call__(self, stage: str) -> None:
+        self._stages.append(stage)
+
+    def run(self, call, poll_sec: float = 0.05):
+        """A generator of the stages `call()` reports, in order, as they are reported;
+        its return value is the call's result, and an error of the call is raised."""
+        result, error = [], []
+
+        def worker():
+            try:
+                result.append(call())
+            except BaseException as exc:  # handed to the caller below
+                error.append(exc)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        seen = 0
+        while True:
+            thread.join(poll_sec)
+            alive = thread.is_alive()
+            while seen < len(self._stages):
+                yield self._stages[seen]
+                seen += 1
+            if not alive:
+                break
+        if error:
+            raise error[0]
+        return result[0]
+
+
+class PromptCache:
+    """
+    Prompts encoded ahead of time, so the demo starts a generation without running
+    the Mimi encoder and the speaker encoder over the prompt: on a CPU these take
+    longer than the first frame of speech.
+
+    An entry is an `.npz` holding `audio_tokens` and `spk_embedding`
+    (`SpeechGenerator.encode_prompt`). It is keyed by the prompt's samples and the
+    settings of the encoding rather than by its path or bytes: gradio decodes every
+    prompt and writes it out again under a temporary name, which keeps the samples of
+    a 16-bit PCM file and nothing else. The key is in the file name next to the stem,
+    so another prompt of the same name, or other settings, is another entry.
+    """
+
+    def __init__(self, directory: str | Path, config: SpeechGeneratorConfig):
+        self.directory = Path(directory)
+        self.config = config
+
+    def entries(self) -> list[Path]:
+        return sorted(self.directory.glob("*.npz")) if self.directory.is_dir() else []
+
+    def signature(
+        self, enhance_prompt: bool, apply_vad: bool, normalize_loudness: bool
+    ) -> dict[str, Any]:
+        """The settings an entry depends on, besides the audio."""
+        config = self.config
+        signature = {
+            "mimi_repo": config.mimi_repo,
+            "mimi_name": config.mimi_name,
+            "num_codebooks": config.num_codebooks,
+            "spk_enc_repo": config.spk_enc_repo,
+            "spk_enc_model": config.spk_enc_model,
+            "spk_enc_model_name": config.spk_enc_model_name,
+            "spk_enc_train_type": config.spk_enc_train_type,
+            "spk_enc_dataset": config.spk_enc_dataset,
+            "max_prompt_sec": config.max_prompt_sec,
+            "enhance_prompt": bool(enhance_prompt),
+            "apply_vad": bool(apply_vad),
+            "normalize_loudness": bool(normalize_loudness),
+        }
+        if normalize_loudness:
+            signature["prompt_loudness_lufs"] = config.prompt_loudness_lufs
+        if apply_vad:
+            signature["min_speech_seg_sec"] = config.min_speech_seg_sec
+        return signature
+
+    def key(self, prompt_audio_path: str | Path, **settings) -> str:
+        samples, sample_rate = sf.read(
+            str(prompt_audio_path), dtype="int16", always_2d=True
+        )
+        digest = hashlib.sha256()
+        digest.update(json.dumps(self.signature(**settings), sort_keys=True).encode())
+        digest.update(f":{sample_rate}:{samples.shape[1]}:".encode())
+        digest.update(np.ascontiguousarray(samples).tobytes())
+        return digest.hexdigest()[:16]
+
+    def path(self, prompt_audio_path: str | Path, key: str) -> Path:
+        return self.directory / f"{Path(prompt_audio_path).stem}.{key}.npz"
+
+    def load(
+        self, prompt_audio_path: str | Path, **settings
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """The entry of the prompt under these settings, None without one."""
+        path = self.path(prompt_audio_path, self.key(prompt_audio_path, **settings))
+        if not path.is_file():
+            return None
+        try:
+            with np.load(path) as entry:
+                return entry["audio_tokens"], entry["spk_embedding"]
+        except (OSError, ValueError, KeyError):
+            return None
+
+    def save(
+        self,
+        prompt_audio_path: str | Path,
+        audio_tokens: Any,
+        spk_embedding: Any,
+        **settings,
+    ) -> Path:
+        """Write the entry of the prompt (tensors or arrays) and return its path."""
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self.path(prompt_audio_path, self.key(prompt_audio_path, **settings))
+        tmp = path.with_name(f"{path.stem}.{uuid.uuid4().hex}.tmp.npz")
+        np.savez(
+            tmp,
+            audio_tokens=np.asarray(_to_numpy(audio_tokens)),
+            spk_embedding=np.asarray(_to_numpy(spk_embedding), dtype=np.float32),
+        )
+        tmp.replace(path)
+        return path
+
+
+def _to_numpy(value: Any) -> np.ndarray:
+    if hasattr(value, "detach"):
+        return (
+            value.detach().float().cpu().numpy()
+            if value.is_floating_point()
+            else value.detach().cpu().numpy()
+        )
+    return np.asarray(value)

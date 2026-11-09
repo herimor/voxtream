@@ -10,8 +10,12 @@ _inflect = inflect.engine()
 _comma_number_re = re.compile(r"([0-9][0-9\,]+[0-9])")
 _decimal_number_re = re.compile(r"([0-9]+\.[0-9]+)")
 _currency_re = re.compile(r"(£|\$|¥)([0-9\,\.]*[0-9]+)")
-_ordinal_re = re.compile(r"[0-9]+(st|nd|rd|th)")
-_number_re = re.compile(r"-?[0-9]+")
+_ordinal_re = re.compile(r"[0-9]+(st|nd|rd|th)\b")
+# A decimal with no integer part: ".5" / "-.5"
+_bare_decimal_re = re.compile(r"(?:(?<!\w)-)?(?<![\w.])\.([0-9]+)")
+# A dash is a sign only when it doesn't join a word or number: "-4" -> "minus
+# four", but "3-4" -> "three-four" (not "threeminus four")
+_number_re = re.compile(r"(?:(?<!\w)-)?[0-9]+")
 
 
 def _remove_commas(m):
@@ -20,6 +24,11 @@ def _remove_commas(m):
 
 def _expand_decimal_point(m):
     return m.group(1).replace(".", " point ")
+
+
+def _expand_bare_decimal(m):
+    sign = "minus " if m.group(0).startswith("-") else ""
+    return f"{sign}point {m.group(1)}"
 
 
 def __expand_currency(value: str, inflection: Dict[float, str]) -> str:
@@ -92,11 +101,12 @@ def _expand_number(m):
 
 
 def normalize_numbers(text):
-    # add space between digits and letters
-    text = re.sub(r"(?<=\d)(?=[A-Za-z])", " ", text)
+    # add space between digits and letters, except an ordinal suffix ("1st")
+    text = re.sub(r"(?<=\d)(?!(?:st|nd|rd|th)\b)(?=[A-Za-z])", " ", text)
     text = re.sub(_comma_number_re, _remove_commas, text)
     text = re.sub(_currency_re, _expand_currency, text)
     text = re.sub(_decimal_number_re, _expand_decimal_point, text)
+    text = re.sub(_bare_decimal_re, _expand_bare_decimal, text)
     text = re.sub(_ordinal_re, _expand_ordinal, text)
     text = re.sub(_number_re, _expand_number, text)
     return text

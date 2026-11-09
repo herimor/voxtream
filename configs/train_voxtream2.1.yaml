@@ -1,0 +1,93 @@
+# VoXtream2.1: flat phoneme vocabulary, random crops of the arrays of
+# herimor/voxtream2-train, AR depth transformer initialized from the pre-trained depth
+# transformer of CSM. Its audio embeddings and AR head stay frozen, its layers are
+# trained. Run with `python voxtream/train.py --config-name train_voxtream2.1`.
+hydra:
+  run:
+    dir: experiments/${exp_name}
+  output_subdir: null
+
+exp_name: voxtream_train
+model_repo: herimor/voxtream2
+dataset_repo: herimor/voxtream2-train
+dataset_base_dir: null
+dep_former_name: dep_former_csm.safetensors
+dep_former_weight_path: null
+model_weight_path: null
+
+batch_size: 64
+lr: 0.0002
+initial_lr: 0.00001
+max_epochs: 10
+max_steps: -1
+warmup_epochs: 1
+weight_decay: 0.01
+precision: bf16-mixed
+gradient_clip_val: 0.5
+seed: 42
+num_workers: 8
+log_every_n_steps: 50
+gpus: -1
+logging_interval: step
+save_weights_only: true
+checkpoint_every_n_steps: null
+save_top_k_epochs: 1
+strategy: ddp
+compile_forward: true
+shuffle: false
+# parameters kept as loaded, by name prefix
+freeze: [audio_embeddings, audio_head]
+
+dataset:
+  # see voxtream/dataset/__init__.py
+  name: flat
+  datasets:
+    emilia:
+      audio_codes: mimi_codes.npy
+      phoneme_sequence_map: phone_tokens.npy
+      phoneme_embedding_indices: phone_emb_indices.npy
+      semantic_label_shifts: sem_label_shifts.npy
+      spk_templates: spk_templates.npy
+      punctuation: punctuation.npy
+    hifitts2:
+      audio_codes: mimi_codes.npy
+      phoneme_sequence_map: phone_tokens.npy
+      phoneme_embedding_indices: phone_emb_indices.npy
+      semantic_label_shifts: sem_label_shifts.npy
+      spk_templates: spk_templates.npy
+      punctuation: punctuation.npy
+
+  audio_delay_frames: 1
+  pad_len: 1
+  semantic_label_pad: 2
+  num_phones_per_frame: 2
+  dtype: int64
+  cfg_prob: 0.1
+  prompt_length_sec:
+    - 3
+    - 10
+  mimi_tps: 12.5
+  phoneme_index_map:
+    "0": 2
+    "1": 3
+    "2": 2
+    "3": 3
+    "4": 2
+    "5": 3
+
+model:
+  phone_former: phone_former
+  temp_former: temp_former
+  dep_former: dep_former_csm
+  phone_vocab_size: 125
+  audio_vocab_size: 2050
+  audio_pad_size: 0
+  embedding_dim: 1024
+  spk_embedding_dim: 192
+  num_codebooks: 16
+  num_phone_states: 6
+  amortization_divisor: 16
+  max_look_ahead: 5
+  audio_window_size: 625
+  phone_window_size: 625
+  dep_former_head: ar

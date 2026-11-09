@@ -1,10 +1,38 @@
+import contextlib
+import io
+import logging
+
 import torch
 import torch.nn as nn
-import torchtune
-from torchtune.models import llama3_2
+from safetensors.torch import load_file
 
 from voxtream.config import SpeechGeneratorConfig
 from voxtream.utils.sampling import sample_top_k, sample_top_p
+
+# torchtune imports torchao, which prints "import error: No module named 'triton'"
+# where triton is missing (macOS, CPU-only installs), and through it
+# torch.distributed, whose elastic module warns that redirects are not supported on
+# macOS and Windows. Neither concerns inference.
+logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(
+    logging.ERROR
+)
+with contextlib.redirect_stdout(io.StringIO()):
+    import torchtune
+    from torchtune.models import llama3_2
+
+
+def load_model_weights(path: str) -> dict[str, torch.Tensor]:
+    """Load model weights from a safetensors file or a Lightning checkpoint."""
+    if str(path).endswith(".safetensors"):
+        return load_file(path)
+
+    weights = torch.load(path, map_location="cpu")
+    state_dict = {}
+    # Remove torch lightning 'model.' prefix
+    for k, v in weights["state_dict"].items():
+        k = k.replace("model.", "")
+        state_dict[k] = v
+    return state_dict
 
 
 def get_llama3_2(
@@ -27,19 +55,25 @@ def get_llama3_2(
     )
 
 
+# factories, not instances: `prepare_transformer` swaps a model's embedding and output
+# layers for Identity, so a shared instance can only ever be built into one Model
 MODEL_POOL = {
-    "phone_former": get_llama3_2(
+    "phone_former": lambda: get_llama3_2(
         num_layers=6, num_heads=8, num_kv_heads=2, embed_dim=1024, intermediate_dim=4096
     ),
-    "temp_former": get_llama3_2(
+    "temp_former": lambda: get_llama3_2(
         num_layers=12,
         num_heads=16,
         num_kv_heads=4,
         embed_dim=1024,
         intermediate_dim=4096,
     ),
-    "dep_former_csm": get_llama3_2(
+    "dep_former_csm": lambda: get_llama3_2(
         num_layers=4, num_heads=8, num_kv_heads=2, embed_dim=1024, intermediate_dim=8192
+    ),
+    # half the depth of the pre-trained `dep_former_csm` at half the MLP width
+    "dep_former": lambda: get_llama3_2(
+        num_layers=2, num_heads=8, num_kv_heads=2, embed_dim=1024, intermediate_dim=4096
     ),
 }
 
@@ -169,6 +203,43 @@ def get_mask(mask: torch.Tensor, input_pos: torch.Tensor) -> torch.Tensor:
     return r
 
 
+def sink_mask(
+    seq_len: int,
+    window_size: int,
+    prompt_lens: torch.Tensor,
+    min_recent_window: int = 1,
+) -> torch.Tensor:
+    """
+    Causal mask that keeps the acoustic prompt attendable however far generation runs.
+
+    This is the attention the generator actually has: `SinkAttention` rebuilds the cache
+    out of the prompt frames and the most recent `window_size` ones, so a query past the
+    window sees the prompt and its own recent past, nothing in between. Training the same
+    shape is what makes a crop longer than the window behave like generation past a cache
+    reset, instead of silently losing the prompt the speaker identity comes from.
+
+    The prompt is part of the budget, not on top of it: the cache holds `window_size`
+    frames in all, so the recent window is what the prompt leaves over. Keeping the full
+    window as well would train on more context than generation ever has.
+
+    Args:
+        seq_len: length of the temporal transformer input
+        window_size: total frames the cache holds, prompt included
+        prompt_lens: (batch_size,) prompt frames at the head of every sample
+        min_recent_window: floor on the recent window, as in `SinkAttentionConfig`
+
+    Returns:
+        (batch_size, seq_len, seq_len) boolean mask
+    """
+    pos = torch.arange(seq_len, device=prompt_lens.device)
+    query, key = pos.view(1, -1, 1), pos.view(1, 1, -1)
+    # the BOS frame is prefilled with the prompt, so the prompt owns keys 0..prompt_len
+    prompt_keys = prompt_lens.view(-1, 1, 1) + 1
+    window = torch.clamp(window_size - prompt_keys, min=min_recent_window)
+    start = torch.maximum(query - (window - 1), prompt_keys)
+    return (key <= query) & ((key < prompt_keys) | (key >= start))
+
+
 def index_causal_mask(mask: torch.Tensor, input_pos: torch.Tensor):
     """
     Args:
@@ -186,10 +257,17 @@ def remove_punctuation(
     data: torch.Tensor, indices_to_remove: torch.Tensor
 ) -> torch.Tensor:
     """
-    data:  [B, S, D]
-    indices_to_remove: [B, R] padded with -1; may include invalids or duplicates.
-    Returns: [B, S, D], where requested indices are removed (per batch) and
-            the tail is padded with data[:, -1, :].
+    Remove the rows of the punctuation tokens of a flat phoneme vocabulary from the
+    output of the phoneme transformer.
+
+    Args:
+        data: (batch_size, seq_len, dim)
+        indices_to_remove: (batch_size, num_rows) padded with -1; may include invalid
+            indices or duplicates
+
+    Returns:
+        (batch_size, seq_len, dim), the requested rows removed (per batch) and the tail
+        padded with the last row
     """
     B, S, D = data.shape
     device = data.device
@@ -208,7 +286,7 @@ def remove_punctuation(
     pos = pos.clamp_min(0)  # avoid negatives where masked
 
     # 3) Scatter kept rows into compacted positions
-    #    We’ll scatter-add the source masked by keep_mask to avoid overwriting problems.
+    #    We scatter-add the source masked by keep_mask to avoid overwriting problems.
     out = data.new_zeros(B, S, D)  # zeros for now
     src = data * keep_mask.unsqueeze(-1)  # zero out removed rows
     out.scatter_add_(

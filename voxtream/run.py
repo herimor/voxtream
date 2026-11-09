@@ -77,6 +77,7 @@ def main():
     with open(args.spk_rate_config) as f:
         spk_rate_config = json.load(f)
 
+    # the backend (`gguf`, `gguf_dir`) and the CPU threads come from the config
     speech_generator = SpeechGenerator(config, spk_rate_config)
 
     if args.text is None:

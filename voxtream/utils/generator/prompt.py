@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Callable, Tuple
 
 import numpy as np
-import pyloudnorm as pyln
+import soundfile as sf
 import torch
 import torchaudio
 from moshi.models import MimiModel
@@ -10,9 +10,8 @@ from silero_vad import get_speech_timestamps
 from torchaudio.transforms import Resample
 
 from voxtream.config import SpeechGeneratorConfig
+from voxtream.utils.dataset.audio import normalize_loudness
 from voxtream.utils.generator.helpers import autocast_ctx
-
-_LOUDNESS_METERS: Dict[int, pyln.Meter] = {}
 
 
 def normalize_prompt_loudness(
@@ -21,30 +20,21 @@ def normalize_prompt_loudness(
     target_lufs: float,
     logger=None,
 ) -> torch.Tensor:
-    """Normalize the acoustic prompt to a fixed integrated loudness (ITU-R BS.1770)."""
-    if sample_rate not in _LOUDNESS_METERS:
-        _LOUDNESS_METERS[sample_rate] = pyln.Meter(sample_rate)
-    meter = _LOUDNESS_METERS[sample_rate]
+    """
+    Normalize the acoustic prompt to a fixed integrated loudness (ITU-R BS.1770).
 
-    if waveform.shape[1] < int(meter.block_size * sample_rate):
-        if logger:
-            logger.warning(
-                f"Prompt audio is shorter than the {meter.block_size:.1f} s loudness "
-                f"block size; skipping loudness normalization."
-            )
-        return waveform
-
+    The same target the store was built with, so the prompt arrives at the level the
+    model was trained to continue from.
+    """
     signal = waveform.squeeze(0).to(dtype=torch.float32).cpu().numpy()
-    loudness = meter.integrated_loudness(signal)
-    if not np.isfinite(loudness):
+    signal = normalize_loudness(signal, sample_rate, target_lufs)
+    if signal is None:
         if logger:
             logger.warning(
-                "Prompt audio loudness is not measurable (silent audio); "
-                "skipping loudness normalization."
+                "Prompt audio is shorter than the loudness block size or too quiet to "
+                "measure; skipping loudness normalization."
             )
         return waveform
-
-    signal = pyln.normalize.loudness(signal, loudness, target_lufs)
 
     peak = float(np.max(np.abs(signal)))
     if peak > 1.0:
@@ -159,13 +149,17 @@ def extract_speech_frames(
     return waveform_vad, waveform_vad_16k
 
 
-def prepare_prompt(
+# the steps of a prompt's preparation, reported to `on_stage` as they start
+STAGE_MIMI = "mimi"
+STAGE_SPEAKER = "speaker"
+
+
+def encode_prompt_audio(
     prompt_audio_path: Path,
     config: SpeechGeneratorConfig,
     logger,
     device: str,
     dtype: torch.dtype,
-    batch_size: int,
     mimi_prompt: MimiModel,
     spk_enc: torch.nn.Module,
     sidon_se,
@@ -173,7 +167,15 @@ def prepare_prompt(
     enhance_prompt: bool = None,
     apply_vad: bool = None,
     normalize_loudness: bool = None,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    on_stage: Callable[[str], None] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    What the prompt audio encodes to: its Mimi codes, (1, num_codebooks, frames), and
+    its unit-norm speaker embedding, (1, dim). On a CPU this is nearly the whole cost
+    of a prompt, so it is what a cache of prompts holds (`build_prompt_inputs` derives
+    the model inputs from it). With `config.cache_prompt` the result is read from,
+    else written to, `<stem>.prompt.npy` next to the audio.
+    """
     prompt_path = prompt_audio_path.parent / f"{prompt_audio_path.stem}.prompt.npy"
     if config.cache_prompt and prompt_path.exists():
         prompt_data = np.load(prompt_path, allow_pickle=True).item()
@@ -182,7 +184,8 @@ def prepare_prompt(
             device, dtype=dtype
         )
     else:
-        waveform, orig_sr = torchaudio.load(str(prompt_audio_path))
+        data, orig_sr = sf.read(str(prompt_audio_path), dtype="float32", always_2d=True)
+        waveform = torch.from_numpy(np.ascontiguousarray(data.T))
         if waveform.shape[0] != 1:
             logger.warning(
                 f"Prompt audio has {waveform.shape[0]} channels; converting to mono by averaging."
@@ -230,6 +233,8 @@ def prepare_prompt(
                 )
             waveform_mimi, sample_rate = sidon_se(waveform_16k, config.spk_enc_sr)
 
+        if on_stage:
+            on_stage(STAGE_MIMI)
         audio_tokens = encode_audio_prompt(
             waveform_mimi,
             sample_rate,
@@ -244,6 +249,8 @@ def prepare_prompt(
             spk_sr = orig_sr
         else:
             spk_sr = config.spk_enc_sr
+        if on_stage:
+            on_stage(STAGE_SPEAKER)
         spk_embedding = extract_speaker_template(
             waveform_16k,
             spk_sr,
@@ -264,6 +271,22 @@ def prepare_prompt(
                 },
             )
 
+    return audio_tokens, spk_embedding
+
+
+def build_prompt_inputs(
+    audio_tokens: torch.Tensor,
+    spk_embedding: torch.Tensor,
+    config: SpeechGeneratorConfig,
+    device: str,
+    batch_size: int,
+    vocab,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    The model inputs of an encoded prompt (`encode_prompt_audio`): the codes delayed
+    behind a pad frame, the masked text of the prompt with the rows each of its frames
+    reads and, with CFG on, the unconditional copy of each alongside.
+    """
     audio_tokens = delay_audio_tokens(
         audio_tokens=audio_tokens,
         audio_pad_token=config.audio_pad_token,
@@ -271,31 +294,20 @@ def prepare_prompt(
         device=device,
     )
 
-    prompt_phone_tokens = np.full(
-        (audio_tokens.shape[2] - 1,),
-        fill_value=config.unk_token,
-        dtype=np.int64,
-    )
-    prompt_phone_tokens[-1] = config.eop_token
+    # the text of the prompt is masked, one row per prompt frame
+    prompt_phone_tokens = vocab.prompt_tokens(audio_tokens.shape[2])
 
     phone_emb_indices = np.repeat(
         np.expand_dims(np.arange(audio_tokens.shape[2]), axis=1),
         config.num_phones_per_frame,
         axis=1,
     )
-    punct_del_indices = np.array([])
 
     prompt_phone_tokens = torch.from_numpy(
-        np.expand_dims(
-            np.concatenate([[config.bos_token], prompt_phone_tokens]), axis=0
-        ),
+        np.expand_dims(prompt_phone_tokens, axis=0)
     ).to(dtype=torch.int64, device=device)
 
     phone_emb_indices = torch.from_numpy(np.expand_dims(phone_emb_indices, axis=0)).to(
-        dtype=torch.int64, device=device
-    )
-
-    punct_del_indices = torch.from_numpy(np.expand_dims(punct_del_indices, axis=0)).to(
         dtype=torch.int64, device=device
     )
 
@@ -308,14 +320,61 @@ def prepare_prompt(
             [spk_embedding, torch.zeros_like(spk_embedding)], dim=0
         )
 
-        prompt_phone_tokens = prompt_phone_tokens.repeat(batch_size, 1)
+        prompt_phone_tokens = prompt_phone_tokens.repeat(
+            batch_size, *[1] * (prompt_phone_tokens.dim() - 1)
+        )
         phone_emb_indices = phone_emb_indices.repeat(batch_size, 1, 1)
-        punct_del_indices = punct_del_indices.repeat(batch_size, 1)
 
     return (
         audio_tokens,
         spk_embedding,
         prompt_phone_tokens,
         phone_emb_indices,
-        punct_del_indices,
+    )
+
+
+def prepare_prompt(
+    prompt_audio_path: Path,
+    config: SpeechGeneratorConfig,
+    logger,
+    device: str,
+    dtype: torch.dtype,
+    batch_size: int,
+    vocab,
+    mimi_prompt: MimiModel,
+    spk_enc: torch.nn.Module,
+    sidon_se,
+    vad: torch.nn.Module,
+    enhance_prompt: bool = None,
+    apply_vad: bool = None,
+    normalize_loudness: bool = None,
+    prompt_encoding: Tuple[torch.Tensor, torch.Tensor] = None,
+    on_stage: Callable[[str], None] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The model inputs of a prompt audio: `encode_prompt_audio`, unless
+    `prompt_encoding` brings its result, then `build_prompt_inputs`."""
+    if prompt_encoding is None:
+        prompt_encoding = encode_prompt_audio(
+            prompt_audio_path=prompt_audio_path,
+            config=config,
+            logger=logger,
+            device=device,
+            dtype=dtype,
+            mimi_prompt=mimi_prompt,
+            spk_enc=spk_enc,
+            sidon_se=sidon_se,
+            vad=vad,
+            enhance_prompt=enhance_prompt,
+            apply_vad=apply_vad,
+            normalize_loudness=normalize_loudness,
+            on_stage=on_stage,
+        )
+    audio_tokens, spk_embedding = prompt_encoding
+    return build_prompt_inputs(
+        torch.as_tensor(audio_tokens).to(device, dtype=torch.int64),
+        torch.as_tensor(spk_embedding).to(device, dtype=dtype),
+        config=config,
+        device=device,
+        batch_size=batch_size,
+        vocab=vocab,
     )

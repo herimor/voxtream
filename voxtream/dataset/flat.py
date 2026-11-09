@@ -1,6 +1,18 @@
+"""
+Training dataset of the flat phoneme vocabulary (`DATASET_POOL["flat"]`), the one
+VoXtream2 and VoXtream2.1 were trained on (Hugging Face `herimor/voxtream2-train`).
+
+Every entry holds the Mimi codes of an utterance, its phoneme tokens, the phoneme rows
+each frame reads and the phoneme state (shift) of each frame, plus the punctuation of the
+utterance as tokens to insert into the phoneme sequence. A sample is a random crop of
+`audio_window_size` frames whose head is the acoustic prompt, its text masked with
+`[UNK]`.
+"""
+
 import random
+from functools import partial
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -8,23 +20,8 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
 
-def collate_fn(
-    batch,
-    phone_pad_token: int,
-) -> Tuple[torch.Tensor, ...]:
-    """Collate function for batching phoneme and audio data.
-
-    Args:
-        batch: List of tuples containing
-            (phoneme_sequence, phoneme_embedding_index,
-             audio_code, semantic_label, audio_label, spk_template).
-        phone_pad_token: Padding token used for phoneme sequences.
-
-    Returns:
-        A tuple of batched tensors:
-        (phoneme_sequences, phoneme_embedding_indices,
-         audio_codes, semantic_labels, audio_labels, spk_templates).
-    """
+def collate(batch, phone_pad_token: int) -> Dict[str, torch.Tensor]:
+    """Pad the phoneme sequences and the punctuation rows of a batch."""
     (
         phoneme_sequences,
         phoneme_embedding_indices,
@@ -32,60 +29,41 @@ def collate_fn(
         semantic_labels,
         audio_labels,
         punct_del_indices,
-        _spk_templates,
+        spk_templates,
     ) = zip(*batch, strict=False)
 
-    # Pad phoneme sequences
-    phoneme_sequences = pad_sequence(
-        [torch.tensor(seq) for seq in phoneme_sequences],
-        batch_first=True,
-        padding_value=phone_pad_token,
-    )
+    def stack(arrays):
+        return torch.as_tensor(np.array(arrays))
 
-    # Pad punctuation deletion indices
-    punct_del_indices = pad_sequence(
-        [torch.tensor(seq) for seq in punct_del_indices],
-        batch_first=True,
-        padding_value=-1,
-    )
-
-    # Convert to tensors
-    phoneme_embedding_indices = torch.as_tensor(np.array(phoneme_embedding_indices))
-    audio_codes = torch.as_tensor(np.array(audio_codes))
-    semantic_labels = torch.as_tensor(np.array(semantic_labels))
-    audio_labels = torch.as_tensor(np.array(audio_labels))
-
-    # Handle optional speaker templates
-    if _spk_templates[0] is None:
-        spk_templates = None
-    else:
-        spk_templates = torch.as_tensor(np.array(_spk_templates))
-
-    return (
-        phoneme_sequences,
-        phoneme_embedding_indices,
-        audio_codes,
-        semantic_labels,
-        audio_labels,
-        punct_del_indices,
-        spk_templates,
-    )
+    return {
+        "phone_tokens": pad_sequence(
+            [torch.tensor(seq) for seq in phoneme_sequences],
+            batch_first=True,
+            padding_value=phone_pad_token,
+        ),
+        "phone_emb_indices": stack(phoneme_embedding_indices),
+        "audio_tokens": stack(audio_codes),
+        "semantic_labels": stack(semantic_labels),
+        "audio_labels": stack(audio_labels),
+        "punct_del_indices": pad_sequence(
+            [torch.tensor(seq) for seq in punct_del_indices],
+            batch_first=True,
+            padding_value=-1,
+        ),
+        "spk_embeddings": None if spk_templates[0] is None else stack(spk_templates),
+    }
 
 
-class TrainDataset(Dataset):
-    """Custom training dataset for phoneme based TTS model."""
+class FlatDataset(Dataset):
+    """Random crops of the utterances of the flat-vocabulary arrays."""
 
     def __init__(
         self,
         base_dir: Path,
+        model: dict,
         datasets: Dict[str, Dict[str, str]],
-        phone_vocab_size: int,
-        audio_vocab_size: int,
-        audio_pad_size: int,
-        num_codebooks: int,
         audio_delay_frames: int,
         dtype: str,
-        audio_window_size: int,
         pad_len: int,
         semantic_label_pad: int,
         num_phones_per_frame: int,
@@ -102,7 +80,7 @@ class TrainDataset(Dataset):
                     data[key] = None
                     continue
 
-                val = np.load(base_dir / name / path, allow_pickle=True)[()]
+                val = np.load(Path(base_dir) / name / path, allow_pickle=True)[()]
                 if key not in data:
                     data[key] = val
                 else:
@@ -112,16 +90,17 @@ class TrainDataset(Dataset):
         for key, val in data.items():
             setattr(self, key, val)
 
+        phone_vocab_size = model["phone_vocab_size"]
         self.phone_bos_token = phone_vocab_size - 2  # <BOS>
         self.phone_eos_token = phone_vocab_size - 1  # <EOS>
         self.phone_unk_token = phone_vocab_size - 3  # <UNK>
-        self.audio_pad_token = audio_vocab_size - 1  # <PAD>
-        self.audio_unk_token = audio_vocab_size - 2  # <UNK>
-        self.audio_pad_size = audio_pad_size
-        self.num_codebooks = num_codebooks
+        self.audio_pad_token = model["audio_vocab_size"] - 1  # <PAD>
+        self.audio_unk_token = model["audio_vocab_size"] - 2  # <UNK>
+        self.audio_pad_size = model["audio_pad_size"]
+        self.num_codebooks = model["num_codebooks"]
+        self.audio_window_size = model["audio_window_size"]
         self.audio_delay_frames = audio_delay_frames
         self.dtype = dtype
-        self.audio_window_size = audio_window_size
         self.pad_len = pad_len
         self.semantic_label_pad = semantic_label_pad
         self.phoneme_index_map = phoneme_index_map
@@ -129,6 +108,8 @@ class TrainDataset(Dataset):
         self.cfg_prob = cfg_prob
         self.prompt_length_sec = prompt_length_sec
         self.mimi_tps = mimi_tps
+        # the phoneme sequences are padded with <EOS>
+        self.collate_fn = partial(collate, phone_pad_token=self.phone_eos_token)
 
     def __len__(self) -> int:
         return len(self.audio_codes)
@@ -163,7 +144,7 @@ class TrainDataset(Dataset):
 
         return padded_audio
 
-    def __getitem__(self, idx: int) -> Tuple[np.ndarray, ...]:
+    def __getitem__(self, idx: int) -> tuple[np.ndarray, ...]:
         """Preprocess single training sample."""
 
         audio_code = self.audio_codes[idx].astype(self.dtype)  # [num_cb, T]
@@ -316,39 +297,3 @@ class TrainDataset(Dataset):
             punct_del_idx,
             spk_template,
         )
-
-
-from functools import partial
-
-import hydra
-from torch.utils.data import DataLoader
-
-
-@hydra.main(version_base=None, config_path="../configs", config_name="train.yaml")
-def main(cfg):
-    train_dataset = TrainDataset(
-        base_dir=Path(cfg.dataset_base_dir),
-        phone_vocab_size=cfg.model.phone_vocab_size,
-        audio_vocab_size=cfg.model.audio_vocab_size,
-        num_codebooks=cfg.model.num_codebooks,
-        audio_window_size=cfg.model.audio_window_size,
-        audio_pad_size=cfg.model.audio_pad_size,
-        **cfg.dataset,
-    )
-
-    collate_func = partial(collate_fn, phone_pad_token=cfg.model.phone_vocab_size - 1)
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=cfg.batch_size,
-        num_workers=cfg.num_workers,
-        collate_fn=collate_func,
-        drop_last=True,
-    )
-
-    for batch in train_dataloader:
-        print(batch)
-        break
-
-
-if __name__ == "__main__":
-    main()

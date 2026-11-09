@@ -104,7 +104,7 @@ if __name__ == "__main__":
     device = f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
     model = (
         torch.hub.load(
-            "IDRnD/ReDimNet",
+            "IDRnD/ReDimNet:master",
             "ReDimNet",
             model_name="M",
             train_type="ft_mix",

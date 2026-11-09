@@ -20,4 +20,6 @@ Download dataset following [instructions](https://github.com/BytedanceSpeech/see
 python run.py -d seedtts-en -dd /path/to/seedtts_testset/en -o /path/to/output/directory --prompt-enhancement
 ```
 
+`-c` picks the model (`configs/generator.json` for VoXtream2.5, `configs/generator_voxtream2.1.json` for VoXtream2.1). On a machine without a GPU, the generation runs through llama.cpp (int8 GGUF files of the model repo) as `gguf` and `cpu_threads` of the config set it.
+
 * Note: Make sure the `$PYTHONPATH` variable contains a repository root directory.

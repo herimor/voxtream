@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -13,8 +14,20 @@ if str(REPO_ROOT) not in sys.path:
 
 import voxtream.run as run
 
+# model: generator config, fixture directory and the extra arguments of `voxtream`
+MODELS = {
+    "voxtream2.5": ("configs/generator.json", "assets/test", []),
+    # as the regression test of the release ran it
+    "voxtream2.1": (
+        "configs/generator_voxtream2.1.json",
+        "assets/test/voxtream2.1",
+        ["--prompt-enhancement"],
+    ),
+}
 
-def test_run_main_output_matches_reference(monkeypatch, tmp_path):
+
+@pytest.mark.parametrize("model", list(MODELS))
+def test_run_main_output_matches_reference(model, monkeypatch, tmp_path):
 
     device_name = "cuda" if torch.cuda.is_available() else "cpu"
     # Sampling makes outputs diverge across CPU architectures / BLAS backends,
@@ -24,8 +37,9 @@ def test_run_main_output_matches_reference(monkeypatch, tmp_path):
         if device_name == "cuda"
         else f"reference_frames_cpu_{sys.platform}_{platform.machine().lower()}.npy"
     )
-    fixture_path = REPO_ROOT / "assets" / "test" / fixture_name
-    config_path = REPO_ROOT / "configs" / "generator.json"
+    config_name, fixture_dir, extra_args = MODELS[model]
+    fixture_path = REPO_ROOT / fixture_dir / fixture_name
+    config_path = REPO_ROOT / config_name
     update_fixture = os.environ.get("UPDATE_REGRESSION_FIXTURES") == "1"
 
     if not update_fixture and not fixture_path.exists():
@@ -37,6 +51,10 @@ def test_run_main_output_matches_reference(monkeypatch, tmp_path):
 
     with config_path.open() as f:
         config = json.load(f)
+    # the CPU fixtures were made with the PyTorch stacks
+    config["gguf"] = False
+    config_path = tmp_path / config_path.name
+    config_path.write_text(json.dumps(config))
 
     captured_write = {}
 
@@ -61,7 +79,7 @@ def test_run_main_output_matches_reference(monkeypatch, tmp_path):
             "reference text",
             "-o",
             str(output_path),
-            "--prompt-enhancement",
+            *extra_args,
         ],
     )
 
@@ -69,6 +87,7 @@ def test_run_main_output_matches_reference(monkeypatch, tmp_path):
 
     assert captured_write["path"] == str(output_path)
     if update_fixture:
+        fixture_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(fixture_path, captured_write["data"])
     expected_audio = np.load(fixture_path)
     assert captured_write["data"].shape == expected_audio.shape

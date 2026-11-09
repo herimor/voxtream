@@ -19,5 +19,6 @@
     "speaking_rate_max": 6.0,
     "speaking_rate_step": 0.1,
     "speaking_rate_default": 4.0,
-    "min_streaming_rtf": 0.95
+    "max_stream_lead_sec": 1.0,
+    "min_stream_update_sec": 0.06
 }

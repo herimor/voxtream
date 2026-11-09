@@ -1,8 +1,12 @@
+import ctypes
+import ctypes.util
 import logging
+import os
 import re
+import shutil
 import subprocess
 from collections import OrderedDict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from packaging.version import Version
 
@@ -83,6 +87,111 @@ def _espeak_exe(espeak_lib: str, args: List, sync=False) -> List[str]:
     return res2
 
 
+class _LibESpeak:
+    """
+    `espeak_TextToPhonemes` of the espeak-ng shared library, bound through ctypes.
+
+    The command-line backend spawns an `espeak-ng` process per call, which costs about
+    10 ms of process start-up and dictionary loading for a word of text; the library
+    call takes well under a millisecond with the same voice and phoneme inventory. It
+    translates the text without the synthesis pass the CLI runs, which on rare clauses
+    moves a stress mark (primary for secondary) and changes nothing else.
+
+    One binding serves the whole process: the library keeps its state, the voice among
+    it, in globals, so it is initialized once and the voice is set whenever a call asks
+    for another one.
+    """
+
+    _shared: Optional["_LibESpeak"] = None
+
+    def __init__(self, path: str):
+        lib = ctypes.cdll.LoadLibrary(path)
+        lib.espeak_Initialize.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+        ]
+        lib.espeak_Initialize.restype = ctypes.c_int
+        lib.espeak_SetVoiceByName.argtypes = [ctypes.c_char_p]
+        lib.espeak_SetVoiceByName.restype = ctypes.c_int
+        lib.espeak_TextToPhonemes.argtypes = [
+            ctypes.POINTER(ctypes.c_char_p),
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
+        lib.espeak_TextToPhonemes.restype = ctypes.c_char_p
+        lib.espeak_Info.argtypes = [ctypes.c_void_p]
+        lib.espeak_Info.restype = ctypes.c_char_p
+        # 0x02 is AUDIO_OUTPUT_SYNCHRONOUS: no audio device is opened
+        if lib.espeak_Initialize(0x02, 0, None, 0) <= 0:
+            raise RuntimeError(f"failed to initialize the espeak library {path}")
+        self.lib = lib
+        self.path = path
+        self.version = lib.espeak_Info(None).decode("utf8").split()[0]
+        self.voice: Optional[str] = None
+
+    @staticmethod
+    def find() -> Optional[str]:
+        """
+        Path of the shared library: `ESPEAK_LIBRARY`, else the loader's search, else
+        the `lib` directory next to the `espeak-ng` executable (macOS dyld does not
+        search Homebrew's /opt/homebrew/lib).
+        """
+        path = os.environ.get("ESPEAK_LIBRARY")
+        if path:
+            return path
+        for name in ("espeak-ng", "espeak"):
+            path = ctypes.util.find_library(name)
+            if path:
+                return path
+        for name in ("espeak-ng", "espeak"):
+            exe = shutil.which(name)
+            if exe is None:
+                continue
+            prefix = os.path.dirname(os.path.dirname(os.path.realpath(exe)))
+            lib_dir = os.path.join(prefix, "lib")
+            for ext in ("dylib", "so", "dll"):
+                path = os.path.join(lib_dir, f"lib{name}.{ext}")
+                if os.path.exists(path):
+                    return path
+        return None
+
+    @classmethod
+    def shared(cls) -> "_LibESpeak":
+        if cls._shared is None:
+            path = cls.find()
+            if path is None:
+                raise RuntimeError(
+                    "libespeak-ng not found: install espeak-ng with its shared library "
+                    "or point ESPEAK_LIBRARY at it"
+                )
+            cls._shared = cls(path)
+        return cls._shared
+
+    def text_to_phonemes(self, text: str, voice: str, tie: bool = False) -> str:
+        """
+        The IPA phonemes of `text`, `_` between phonemes and a space between words, as
+        `espeak-ng --ipa=1 -v {voice}` prints them; with `tie` a tie bar joins the
+        characters of a phoneme instead (`--ipa=3`).
+        """
+        if voice != self.voice:
+            # the same call the CLI makes for `-v`
+            if self.lib.espeak_SetVoiceByName(voice.encode("utf8")) != 0:
+                raise RuntimeError(f"espeak voice {voice!r} not found")
+            self.voice = voice
+        # bit 1 asks for IPA, bits 8-23 hold the separator; bit 7 makes it a tie bar
+        mode = 0x02 | ((0x80 | ord("͡") << 8) if tie else ord("_") << 8)
+        ptr = ctypes.pointer(ctypes.c_char_p(text.encode("utf8")))
+        clauses = []
+        # one clause per call; the pointer moves past it and ends at NULL
+        while ptr.contents.value is not None:
+            out = self.lib.espeak_TextToPhonemes(ptr, 1, mode)  # 1: UTF-8 text
+            if out:
+                clauses.append(out.decode("utf8"))
+        return " ".join(clauses)
+
+
 class ESpeak(BasePhonemizer):
     """ESpeak wrapper calling `espeak` or `espeak-ng` from the command-line the perform G2P
 
@@ -100,12 +209,16 @@ class ESpeak(BasePhonemizer):
         keep_puncs (bool):
             If True, keep the punctuations after phonemization. Defaults to True.
 
+        library (str):
+            `espeak-lib` calls the espeak-ng shared library in place of the command-line
+            tool (`_LibESpeak`): the same phonemes without a process per call. Any other
+            value (e.g. `espeak`) runs the tool, which is still needed to list the
+            supported languages. Defaults to `espeak-lib`.
+
     Example:
 
-        >>> from TTS.tts.utils.text.phonemizers import ESpeak
-        >>> phonemizer = ESpeak("tr")
-        >>> phonemizer.phonemize("Bu Türkçe, bir örnektir.", separator="|")
-        'b|ʊ t|ˈø|r|k|tʃ|ɛ, b|ɪ|r œ|r|n|ˈɛ|c|t|ɪ|r.'
+        >>> phonemizer = ESpeak("en-us")
+        >>> phonemizer.phonemize("Hello world.", separator="|")
 
     """
 
@@ -121,18 +234,17 @@ class ESpeak(BasePhonemizer):
         punctuations=None,
         keep_puncs=True,
         cache_size: int = 8192,
+        library: str = "espeak-lib",
     ):
         if self._ESPEAK_LIB is None:
             raise Exception(
                 " [!] No espeak backend found. Install espeak-ng or espeak to your system."
             )
         self.backend = self._ESPEAK_LIB
+        self._lib = _LibESpeak.shared() if library == "espeak-lib" else None
 
-        # band-aid for backwards compatibility
         if language == "en":
             language = "en-us"
-        if language == "zh-cn":
-            language = "cmn"
 
         punctuations = DEFAULT_PUNCTUATIONS if punctuations is None else punctuations
         super().__init__(language, punctuations=punctuations, keep_puncs=keep_puncs)
@@ -181,6 +293,15 @@ class ESpeak(BasePhonemizer):
     def name():
         return "espeak"
 
+    @staticmethod
+    def library_available() -> bool:
+        """Whether the espeak-ng shared library can be found (`library="espeak-lib"`)."""
+        return _LibESpeak.find() is not None
+
+    @property
+    def library(self) -> bool:
+        return self._lib is not None
+
     def phonemize_espeak(
         self, text: str, separator: str = "|", tie=False, language: str = None
     ) -> str:
@@ -201,6 +322,30 @@ class ESpeak(BasePhonemizer):
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
+        if self._lib is not None:
+            lines = self._lib.text_to_phonemes(text, voice=language, tie=tie).split(
+                "\n"
+            )
+        else:
+            lines = [
+                line.decode("utf8")
+                for line in _espeak_exe(
+                    self._ESPEAK_LIB, self._cli_args(language, tie, text), sync=True
+                )
+            ]
+        # compute phonemes
+        phonemes = ""
+        for line in lines:
+            logging.debug("line: %s", repr(line))
+            ph_decoded = re.sub(r"\(.+?\)", "", line.strip())
+            phonemes += ph_decoded.strip()
+
+        phonemes = phonemes.replace("_", separator)
+        self._cache_set(cache_key, phonemes)
+        return phonemes
+
+    def _cli_args(self, language: str, tie: bool, text: str) -> List[str]:
+        """Arguments of the command-line call for `text`."""
         args = ["-v", f"{language}"]
         # espeak and espeak-ng parses `ipa` differently
         if tie:
@@ -222,17 +367,7 @@ class ESpeak(BasePhonemizer):
             args.append("--tie=%s" % tie)
 
         args.append(text)
-        # compute phonemes
-        phonemes = ""
-        for line in _espeak_exe(self._ESPEAK_LIB, args, sync=True):
-            logging.debug("line: %s", repr(line))
-            ph_decoded = line.decode("utf8").strip()
-            ph_decoded = re.sub(r"\(.+?\)", "", ph_decoded)
-            phonemes += ph_decoded.strip()
-
-        phonemes = phonemes.replace("_", separator)
-        self._cache_set(cache_key, phonemes)
-        return phonemes
+        return args
 
     def _cache_get(self, key: Tuple[str, str, bool, str]) -> str | None:
         if self._cache_size <= 0:

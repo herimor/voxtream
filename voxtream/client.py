@@ -1,26 +1,33 @@
+"""
+Client of `voxtream-server`: streams a text word by word and plays the audio as it
+arrives, or writes it to `--output`.
+
+    python voxtream/client.py --prompt-audio assets/audio/english_male.wav
+"""
+
+import argparse
 import asyncio
 import json
 
 import numpy as np
-import sounddevice as sd
 import websockets
 
 
-async def main():
-    uri = "ws://localhost:7860/voxtream"
-    async with websockets.connect(uri, max_size=None) as ws:
+async def main(args: argparse.Namespace) -> None:
+    async with websockets.connect(args.uri, max_size=None) as ws:
         await ws.send(
             json.dumps(
                 {
                     "event": "init",
-                    "prompt_audio_path": "assets/audio/english_male.wav",  # or use prompt_audio_b64
+                    # a path on the server, or use prompt_audio_b64
+                    "prompt_audio_path": args.prompt_audio,
                     "full_stream": True,
                 }
             )
         )
 
-        # Example: stream a sentence word-by-word:
-        for word in "Streaming synthesis starts right away".split():
+        # Stream the text word by word
+        for word in args.text.split():
             await ws.send(json.dumps({"event": "text", "chunk": word + " "}))
         await ws.send(json.dumps({"event": "eot"}))
 
@@ -33,19 +40,57 @@ async def main():
         assert cfg["type"] == "config"
         sr = int(cfg["sample_rate"])
 
-        # Play audio as it arrives
-        sd.default.samplerate = sr
-        sd.default.channels = 1
-        with sd.OutputStream(dtype="float32") as stream:
+        frames = []
+        stream = None
+        if args.output is None:
+            import sounddevice as sd
+
+            stream = sd.OutputStream(samplerate=sr, channels=1, dtype="float32")
+            stream.start()
+        try:
             while True:
                 msg = await ws.recv()
                 if isinstance(msg, bytes):
                     audio = np.frombuffer(msg, dtype=np.float32)
-                    stream.write(audio)
+                    if stream is not None:  # play audio as it arrives
+                        stream.write(audio)
+                    else:
+                        frames.append(audio)
                 else:
                     data = json.loads(msg)
+                    if data.get("type") == "error":
+                        print("Error from server:", data["message"])
                     if data.get("type") == "eos":
                         break
+        finally:
+            if stream is not None:
+                stream.stop()
+                stream.close()
+
+        if args.output is not None:
+            import soundfile as sf
+
+            audio = np.concatenate(frames) if frames else np.zeros(0, np.float32)
+            sf.write(args.output, audio, sr)
+            print(f"{args.output}: {len(audio) / sr:.2f} s")
 
 
-asyncio.run(main())
+def parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Stream a text to voxtream-server, play or save the audio"
+    )
+    parser.add_argument("--uri", default="ws://localhost:7860/voxtream")
+    parser.add_argument(
+        "--prompt-audio",
+        default="assets/audio/english_male.wav",
+        help="Prompt audio, a path on the server",
+    )
+    parser.add_argument("--text", default="Streaming synthesis starts right away")
+    parser.add_argument(
+        "--output", default=None, help="Write the audio to this file instead of playing"
+    )
+    return parser.parse_args(argv)
+
+
+if __name__ == "__main__":
+    asyncio.run(main(parse_args()))

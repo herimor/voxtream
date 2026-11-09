@@ -5,15 +5,25 @@ import inflect
 
 _inflect = inflect.engine()
 
+# am / pm / a.m. / P.M. / "P M" (punct_norm splits "P.M." into letters);
+# captures the letter. The abbreviation's dot is consumed only when the
+# sentence goes on ("4 p.m. sharp"), so a sentence-final "p.m." keeps its stop.
+AM_PM = r"([aApP])\.?\s?[mM](?!\w)(?:\.(?=\s+[a-z0-9]))?"
+
 _time_re = re.compile(
     r"""\b
                           ((0?[0-9])|(1[0-1])|(1[2-9])|(2[0-3]))  # hours
                           :
                           ([0-5][0-9])                            # minutes
-                          \s*(a\\.m\\.|am|pm|p\\.m\\.|a\\.m|p\\.m)? # am/pm
-                          \b""",
-    re.IGNORECASE | re.X,
+                          (?:\s*"""
+    + AM_PM
+    + r""")?                                                      # am/pm
+                          (?!\w)""",
+    re.X,
 )
+
+# A bare hour with am/pm: "4pm" / "9 a.m."
+_hour_re = re.compile(r"(?<![\d:.])\b(1[0-2]|0?[1-9])\s*" + AM_PM)
 
 
 def _expand_num(n: int) -> str:
@@ -40,9 +50,14 @@ def _expand_time_english(match: "re.Match") -> str:
     if am_pm is None:
         time.append("p m" if past_noon else "a m")
     else:
-        time.extend(list(am_pm.replace(".", "")))
+        time.append(f"{am_pm.lower()} m")
     return " ".join(time)
 
 
+def _expand_hour_english(match: "re.Match") -> str:
+    return f"{_expand_num(int(match.group(1)))} {match.group(2).lower()} m"
+
+
 def expand_time_english(text: str) -> str:
-    return re.sub(_time_re, _expand_time_english, text)
+    text = re.sub(_time_re, _expand_time_english, text)
+    return re.sub(_hour_re, _expand_hour_english, text)

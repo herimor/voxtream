@@ -1,5 +1,6 @@
 import argparse
 import random
+import re
 import string
 import warnings
 from pathlib import Path
@@ -73,12 +74,41 @@ WHISPER_FALLBACK = dict(
     compression_ratio_threshold=1.35,  # HF token-level counterpart of openai-whisper's 2.4
 )
 
+# Whisper decides for itself when an utterance is over and sometimes ends one early,
+# returning two words for ten seconds of speech. The compression-ratio fallback above
+# does not catch it - a short transcript compresses fine - so the guard is the density
+# of the transcript against the audio. Read speech runs at 2.5-3 words per second in
+# both test sets (p1 = 1.4), and this is set below even that: a decode that merely
+# looks thin is left alone, because a second reading of a sound file that is simply
+# quiet or slow brings back inventions rather than words ("Yeah.", "Chow.").
+MIN_WORDS_PER_SEC = 1.0
+MIN_RETRY_SEC = 2.0
+
+# Window the retry decodes the audio in, when timestamps have not recovered it either.
+# Each window is decoded on its own, so none of them can end the utterance for the
+# others. They do not overlap: a seam costs at most the word it cuts, while an overlap
+# repeats whatever both sides heard.
+RETRY_WINDOW_SEC = 4.0
+
+# A rescued decode has to bring back a good deal more than it had, or it is not a
+# rescue. The collapses this is for return a fraction of the utterance - one word of
+# twenty-six - while a sound transcript that trips the density guard gains a word or
+# two of noise on a second reading, which this rejects. The ratio alone is not enough
+# at the short end, where a four-word transcript reaches it by picking up a "Thank
+# you.", so a rescue also has to be worth whole words.
+MIN_RETRY_GAIN = 1.5
+MIN_RETRY_WORDS = 4
+
 
 def init_whisper_model(
-    asr_model_name: str = "openai/whisper-large-v3", device: str = "cuda"
+    asr_model_name: str = "openai/whisper-large-v3",
+    device: str = "cuda",
+    dtype: torch.dtype = torch.float32,
 ):
     processor = WhisperProcessor.from_pretrained(asr_model_name)
-    model = WhisperForConditionalGeneration.from_pretrained(asr_model_name).to(device)
+    model = WhisperForConditionalGeneration.from_pretrained(
+        asr_model_name, dtype=dtype
+    ).to(device)
 
     def transcribe(processor, model, wav, sr: int = 16000, device: str = "cuda"):
         long_form = len(wav) > WHISPER_WINDOW_SEC * sr
@@ -98,7 +128,7 @@ def init_whisper_model(
             processed = processor(
                 wav, sampling_rate=sr, return_tensors="pt", return_attention_mask=True
             )
-        input_features = processed.input_features.to(device)
+        input_features = processed.input_features.to(device, dtype=dtype)
         attention_mask = processed.get("attention_mask")
         if attention_mask is not None:
             attention_mask = attention_mask.to(device)
@@ -121,7 +151,71 @@ def init_whisper_model(
 
         return transcription
 
-    return processor, model, transcribe
+    def decode(wav, sr, **kwargs):
+        """One `generate` over `wav`, with the defaults of the harness."""
+        processed = processor(
+            wav, sampling_rate=sr, return_tensors="pt", return_attention_mask=True
+        )
+        attention_mask = processed.get("attention_mask")
+        set_seed()
+        predicted_ids = model.generate(
+            processed.input_features.to(device, dtype=dtype),
+            attention_mask=(
+                None if attention_mask is None else attention_mask.to(device)
+            ),
+            language="english",
+            task="transcribe",
+            **WHISPER_FALLBACK,
+            **kwargs,
+        )
+        return processor.batch_decode(predicted_ids, skip_special_tokens=True)[
+            0
+        ].strip()
+
+    def transcribe_dense(processor, model, wav, sr: int = 16000, device: str = "cuda"):
+        """
+        `transcribe`, with a second look at a decode that stopped early.
+
+        A transcript far too short for the audio is re-decoded with timestamps, which
+        is Whisper's own way of being told the utterance continues, and failing that in
+        windows. A rereading is kept only when it brings back `MIN_RETRY_GAIN` times the
+        words: each is a reading of the same audio, so one that finds far more of them
+        is one that gave up later, while one that finds a couple more has only decorated
+        what was already there. A file this never fires on is scored exactly as before.
+        """
+        best = transcribe(processor, model, wav, sr=sr, device=device)
+        duration = len(wav) / sr
+        if duration < MIN_RETRY_SEC or duration > WHISPER_WINDOW_SEC:
+            return best
+
+        def dense(text):
+            return len(text.split()) / duration >= MIN_WORDS_PER_SEC
+
+        if dense(best):
+            return best
+
+        def gained(candidate):
+            found, had = len(candidate.split()), len(best.split())
+            return (
+                found >= MIN_RETRY_GAIN * max(1, had) and found - had >= MIN_RETRY_WORDS
+            )
+
+        retry = decode(wav, sr, return_timestamps=True, condition_on_prev_tokens=False)
+        if gained(retry):
+            best = retry
+        if dense(best):
+            return best
+
+        window = int(RETRY_WINDOW_SEC * sr)
+        parts = [
+            decode(wav[i : i + window], sr)
+            for i in range(0, len(wav), window)
+            if len(wav[i : i + window]) > 0.3 * sr
+        ]
+        windowed = " ".join(p for p in parts if p)
+        return windowed if gained(windowed) else best
+
+    return processor, model, transcribe_dense
 
 
 def init_hubert_model(
@@ -150,8 +244,25 @@ MODEL_POOL = {
 }
 
 
+# An apostrophe inside a word is part of it (don't, Jane's); one on the outside
+# is a quotation mark. The references write quoted speech with double quotes, which
+# this strips, while Whisper writes it with single ones, so keeping those turned every
+# quoted word into a substitution - 38% of the raw errors on librispeech-pc.
+QUOTE_APOSTROPHE = re.compile(r"(?<![A-Za-z])'|'(?![A-Za-z])")
+
+# The Whisper normalizer deletes bracketed text outright. A reference carries it as an
+# aside the speaker still reads aloud ("(the figure is obliterated)"), so the model says
+# those words and the normalized reference no longer has them: every one is an
+# insertion. Dropping the brackets before normalizing keeps the words on both sides.
+BRACKETS = re.compile(r"[()\[\]]")
+
+
 def prepare_sentence(text):
-    # remove punctuation
+    # replace ’ with ' before the quote apostrophes are picked out
+    text = text.replace("’", "'")
+
+    # remove punctuation, apart from the apostrophes that spell a word
+    text = QUOTE_APOSTROPHE.sub("", text)
     for x in string.punctuation:
         if x == "'":
             continue
@@ -164,6 +275,11 @@ def prepare_sentence(text):
     text = text.lower()
 
     return text
+
+
+def normalize_sentence(normalizer, text):
+    """Whisper normalization, with the brackets taken off first (see `BRACKETS`)."""
+    return normalizer(BRACKETS.sub(" ", text))
 
 
 def remove_fillers(text):
@@ -257,7 +373,8 @@ def main(
 
         # Whisper normalization + removed fillers
         wer_score_norm = wer(
-            normalizer(text_wo_fillers), normalizer(pred_text_wo_fillers)
+            normalize_sentence(normalizer, text_wo_fillers),
+            normalize_sentence(normalizer, pred_text_wo_fillers),
         )
 
         wer_scores["path"].append(row.path)

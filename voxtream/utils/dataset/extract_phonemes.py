@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-np",
         "--num-proc",
-        type=str,
+        type=int,
         help="Number of processes for parallel processing",
     )
     args = parser.parse_args()

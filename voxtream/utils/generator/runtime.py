@@ -5,6 +5,7 @@ from typing import Deque, Dict, Iterator, List, Tuple
 import numpy as np
 import torch
 from moshi.models import MimiModel
+from moshi.utils.compile import CUDAGraphed
 
 from voxtream.config import SpeechGeneratorConfig
 from voxtream.utils.generator.context import FrameState, GenerationContext
@@ -22,8 +23,50 @@ class SpeakingRateRuntimeState:
     last_speaking_rate: float | None = None
 
 
+class MimiFrameDecoder:
+    """
+    Streaming Mimi decoder for one frame per call.
+    On CUDA the whole decode (RVQ dequantize, upsample, decoder transformer, SEANet)
+    runs as a single CUDA graph. Moshi graphs only the transformer and SEANet,
+    leaving the 16-codebook dequantize dominated by kernel launch overhead.
+    Must be created after entering `mimi.streaming(...)`: the graph captures the
+    streaming state buffers, which `reset_streaming()` updates in place.
+    """
+
+    def __init__(self, mimi: MimiModel):
+        self.mimi = mimi
+        disable = next(mimi.parameters()).device.type != "cuda"
+        self._graphed_decode = CUDAGraphed(self._decode, disable=disable)
+
+    def _decode(self, codes: torch.Tensor) -> torch.Tensor:
+        emb = self.mimi.decode_latent(codes)
+        emb = self.mimi._to_encoder_framerate(emb)
+        if self.mimi.decoder_transformer is not None:
+            (emb,) = self.mimi.decoder_transformer(emb)
+        return self.mimi.decoder(emb).to(dtype=torch.float32)
+
+    def __call__(self, codes: torch.Tensor) -> torch.Tensor:
+        """Decode `codes` (batch, num_codebooks, 1). On CUDA the output is a static
+        graph buffer, overwritten by the next call."""
+        return self._graphed_decode(codes)
+
+
+# A decoded frame counts as sound above this level; below it the frame is silence and
+# the opening of a draw is still held back (`start_retry_frames`). Mimi renders silence
+# near -70 dBFS and speech above -40, so the threshold sits well clear of both.
+SPEECH_DBFS = -50.0
+
+
+def frame_has_speech(audio_frame: np.ndarray) -> bool:
+    """Whether a decoded frame carries sound rather than silence."""
+    if audio_frame.size == 0:
+        return False
+    power = float(np.mean(np.square(audio_frame, dtype=np.float64)))
+    return 10.0 * np.log10(power + 1e-12) > SPEECH_DBFS
+
+
 def decode_audio_frame(
-    mimi: MimiModel,
+    mimi_decoder: MimiFrameDecoder,
     frame: torch.Tensor,
     sem_code: torch.Tensor,
     mimi_vocab_size: int,
@@ -33,8 +76,8 @@ def decode_audio_frame(
     audio_frame = torch.clamp(audio_frame, 0, int(mimi_vocab_size - 1)).to(torch.int64)
     sem_code = frame[:, :1]
 
-    audio_frame = mimi.decode(audio_frame.unsqueeze(-1)).squeeze()
-    audio_frame = audio_frame.to(dtype=torch.float32).cpu().numpy()
+    # .cpu() copies out of the static graph buffer.
+    audio_frame = mimi_decoder(audio_frame.unsqueeze(-1)).squeeze().cpu().numpy()
     return audio_frame, sem_code
 
 
@@ -43,32 +86,74 @@ def update_indices_and_tokens(
     frame: torch.Tensor,
     idx: int,
     phone_seq_len: int,
+    max_phone_idx: int,
     frame_state: FrameState,
     ctx: GenerationContext,
 ) -> Tuple[torch.Tensor, FrameState]:
-    """Update phone embedding indices, audio tokens, and EOS logic."""
+    """
+    Update phone embedding indices, audio tokens, and EOS logic.
+
+    `phone_seq_len` is where the pointer has to stop; `max_phone_idx` is the last row the
+    phoneme sequence actually has. They are not the same: while a text stream is still
+    arriving there is no stop at all, and once it ends the pointer holds the last phoneme
+    through the closing release and then steps onto `[EOS]`, which ends generation. Every
+    index is clamped to `max_phone_idx` so neither case can reach past the embeddings.
+    Their difference is also how this function knows the text has ended: only then do the
+    two coincide.
+    """
     pred_shift_int = int(pred_shift.item())
     shift, num_tokens = ctx.phoneme_index_map[str(pred_shift_int)]
 
     start = frame_state.phone_emb_max_idx + shift
     state = (start, start + num_tokens)
+    kicked = False
     if state in frame_state.state_counter:
-        if start >= phone_seq_len - 2 and frame_state.state_counter[state] == 3:
+        repeats = frame_state.state_counter[state]
+        # Generation ends when the model steps off the last phoneme onto `[EOS]`, which
+        # a crop closing on a sentence end supervises. This is the net for when it does
+        # not: once the text has run out and the pointer has held the final row long
+        # enough to have rendered the release, take the step on the model's behalf. Both
+        # guards matter: mid-stream the last row is simply the newest text, and forcing
+        # the pointer off it would end generation in the middle of the utterance.
+        text_ended = phone_seq_len <= max_phone_idx
+        if (
+            text_ended
+            and start >= phone_seq_len - 1
+            and repeats >= ctx.config.final_phone_hold_frames
+        ):
             start += 1
             state = (start, start + num_tokens)
         # Push the model to move forward if it's stuck on the same state for too long
-        elif frame_state.state_counter[state] > ctx.config.frame_repeat_counter:
+        elif repeats > ctx.config.frame_repeat_counter:
             start += 1
             state = (start, start + num_tokens)
+            kicked = True
+
+    # a step of the model's own ends a stall; a hold leaves the count as it is
+    if kicked:
+        kicks = frame_state.kicks + 1
+        stall_anchor = (
+            frame_state.stall_anchor if kicks > 1 else frame_state.phone_emb_max_idx
+        )
+    elif shift > 0:
+        kicks, stall_anchor = 0, -1
+    else:
+        kicks, stall_anchor = frame_state.kicks, frame_state.stall_anchor
 
     eos_idx = frame_state.eos_idx
 
     if start >= phone_seq_len:
-        end_token = min(start, phone_seq_len + 1)
-        val = [end_token] * ctx.config.num_phones_per_frame
+        # The loop runs one more frame after `eos_idx` is set, so this index is still
+        # fed to the model and decoded into audio. Once the text has ended the row it
+        # lands on is `[EOS]`, where training leaves the pointer through the silence
+        # that closes a crop, so the frame renders that silence. While the text is still
+        # arriving there is no `[EOS]` yet and the clamp lands on the newest row.
+        val = [max(0, min(int(start), max_phone_idx))] * ctx.config.num_phones_per_frame
         eos_idx = idx
     else:
-        val = list(range(int(start), int(start + num_tokens)))
+        val = [
+            min(i, max_phone_idx) for i in range(int(start), int(start + num_tokens))
+        ]
         while len(val) < ctx.config.num_phones_per_frame:
             val.append(val[-1])
 
@@ -92,7 +177,28 @@ def update_indices_and_tokens(
             phone_emb_max_idx=phone_emb_max_idx,
             eos_idx=eos_idx,
             state_counter=frame_state.state_counter,
+            kicks=kicks,
+            stall_anchor=stall_anchor,
         ),
+    )
+
+
+def restart_from_stall(frame_state: FrameState, ctx: GenerationContext) -> FrameState:
+    """The frame state rewound to the pointer the stall began on, its counters cleared
+    so the rows ahead may be held again. The audio context is reset by the caller."""
+    anchor = max(0, int(frame_state.stall_anchor))
+    rows = [anchor] * ctx.config.num_phones_per_frame
+    return FrameState(
+        phone_emb_indices=torch.tensor(
+            [[rows]] * ctx.batch_size,
+            device=frame_state.phone_emb_indices.device,
+            dtype=torch.int64,
+        ),
+        phone_emb_max_idx=anchor,
+        eos_idx=frame_state.eos_idx,
+        state_counter={
+            s: c for s, c in frame_state.state_counter.items() if s[0] < anchor
+        },
     )
 
 

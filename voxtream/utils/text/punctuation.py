@@ -2,8 +2,6 @@ import collections
 import re
 from enum import Enum
 
-import six
-
 _DEF_PUNCS = ';:,.!?¡¿—…"«»“”'
 
 _PUNC_IDX = collections.namedtuple("_punc_index", ["punc", "position"])
@@ -53,7 +51,7 @@ class Punctuation:
 
     @puncs.setter
     def puncs(self, value):
-        if not isinstance(value, six.string_types):
+        if not isinstance(value, str):
             raise ValueError("[!] Punctuations must be of type str.")
         self._puncs = "".join(
             list(dict.fromkeys(list(value)))
@@ -109,11 +107,11 @@ class Punctuation:
             split = text.split(punc.punc)
             prefix, suffix = split[0], punc.punc.join(split[1:])
             text = suffix
-            if prefix == "":
-                # We don't want to insert an empty string in case of initial punctuation
-                continue
-            splitted_text.append(prefix)
+            # We don't want to insert an empty string in case of initial punctuation
+            if prefix != "":
+                splitted_text.append(prefix)
             # if the text does not end with a punctuation, add it to the last item
+            # (also after a lone initial punctuation: ", what" keeps "what")
             if idx == len(puncs) - 1 and len(suffix) > 0:
                 splitted_text.append(suffix)
         return splitted_text, puncs

@@ -270,7 +270,7 @@ class ECAPA_TDNN(nn.Module):
                 logging.ERROR
             )
             self.feature_extract = torch.hub.load(
-                "s3prl/s3prl", feat_type, trust_repo=True, verbose=False
+                "s3prl/s3prl:main", feat_type, trust_repo=True, verbose=False
             )
             if len(self.feature_extract.model.encoder.layers) == 24 and hasattr(
                 self.feature_extract.model.encoder.layers[23].self_attn,

@@ -19,7 +19,7 @@ from voxtream.utils.test.ecapa_tdnn import init_ecapa
 
 def init_redimnet(
     model_path: str = None,
-    repo_or_dir: str = "IDRnD/ReDimNet",
+    repo_or_dir: str = "IDRnD/ReDimNet:master",
     model: str = "ReDimNet",
     model_name: str = "M",
     train_type: str = "ft_mix",

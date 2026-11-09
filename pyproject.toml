@@ -7,7 +7,7 @@ license-files = ["LICENSE"]
 
 [project]
 name = "voxtream"
-version = "0.2.5"
+version = "0.2.6"
 description = "Full-Stream Zero-shot TTS model with Extremely Low Latency and Speaking-rate Control"
 readme = "README.md"
 license = { text = "MIT" }
@@ -52,7 +52,18 @@ dependencies = [
   "silero-vad==6.2.0",
   "pyloudnorm==0.2.0",
   "jiwer==4.0.0",
-  "openai-whisper==20250625"
+  "openai-whisper==20250625",
+  "safetensors>=0.5.3",
+  "regex>=2026.4.4",
+  "packaging>=24.2",
+  "fastapi>=0.135",
+  "uvicorn>=0.44",
+  "websockets>=12.0",
+  "numpy>=2.2",
+  "pandas>=2.3",
+  "tqdm>=4.67",
+  "llama-cpp-python>=0.3.16",
+  "gguf>=0.17"
 ]
 
 [project.optional-dependencies]
@@ -67,6 +78,7 @@ Source = "https://github.com/herimor/voxtream"
 voxtream = "voxtream.run:main"
 voxtream-app = "voxtream.app:main"
 voxtream-benchmark = "voxtream.benchmark:main"
+voxtream-convert-gguf = "voxtream.utils.gguf.convert:main"
 voxtream-server = "voxtream.server:main"
 
 [tool.setuptools.packages.find]
@@ -82,6 +94,12 @@ skip-string-normalization = false
 [tool.isort]
 profile = "black"
 combine_as_imports = true
+
+[tool.pytest.ini_options]
+filterwarnings = [
+  # gradio 4.44 imports multipart under its deprecated name
+  "ignore:Please use `import python_multipart` instead.:PendingDeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 88
@@ -100,6 +118,7 @@ disable_error_code = [
   "attr-defined",
   "call-overload",
   "import-untyped",
+  "index",
   "method-assign",
   "misc",
   "name-match",

@@ -4,6 +4,8 @@ A tiny WebSocket TTS server for VoXtream.
 
 Protocol (very simple):
 
+Start it with `voxtream-server [--config configs/generator.json] [--port 7860]`.
+
 Client connects to ws://HOST:PORT/voxtream and first sends a JSON text frame:
 
 {
@@ -34,6 +36,7 @@ Server responses:
   {"type":"eos"}
 """
 
+import argparse
 import asyncio
 import base64
 import json
@@ -50,7 +53,10 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig  # type: ignore
-from voxtream.utils.generator import set_seed  # type: ignore
+from voxtream.utils.generator import existing_file, set_seed  # type: ignore
+
+DEFAULT_CONFIG = "configs/generator.json"
+DEFAULT_SPK_RATE_CONFIG = "configs/speaking_rate.json"
 
 # ---------- Helpers ----------
 
@@ -101,11 +107,9 @@ def get_generator_from_state(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     set_seed()
-    config_path = "configs/generator.json"
-    with open(config_path) as f:
+    with open(getattr(app.state, "config_path", DEFAULT_CONFIG)) as f:
         config = SpeechGeneratorConfig(**json.load(f))
-    spk_rate_config_path = "configs/speaking_rate.json"
-    with open(spk_rate_config_path) as f:
+    with open(getattr(app.state, "spk_rate_config_path", DEFAULT_SPK_RATE_CONFIG)) as f:
         spk_rate_config = json.load(f)
 
     app.state.config = config
@@ -215,18 +219,6 @@ async def synthesis(ws: WebSocket):
             await ws.close()
             return
 
-        # Tell client what to expect (mono, float32, PCM)
-        await ws.send_text(
-            json.dumps(
-                {
-                    "type": "config",
-                    "sample_rate": sample_rate,
-                    "dtype": "float32",
-                    "channels": 1,
-                }
-            )
-        )
-
         # --- 2) Prepare text source (string OR generator) ---
         # If full_stream, we build an iterator fed by subsequent websocket messages.
         text_source: str | Iterator[str]
@@ -304,12 +296,12 @@ async def synthesis(ws: WebSocket):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-        # Tell client config before streaming
+        # Tell client what to expect (mono, float32, PCM)
         await ws.send_text(
             json.dumps(
                 {
                     "type": "config",
-                    "sample_rate": config.mimi_sr,
+                    "sample_rate": sample_rate,
                     "dtype": "float32",
                     "channels": 1,
                 }
@@ -356,7 +348,27 @@ async def synthesis(ws: WebSocket):
 
 
 def main():
-    uvicorn.run(app, host="0.0.0.0", port=7860, reload=False)
+    parser = argparse.ArgumentParser(description="VoXtream WebSocket TTS server")
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=existing_file,
+        default=DEFAULT_CONFIG,
+        help="Path to the generator config file",
+    )
+    parser.add_argument(
+        "--spk-rate-config",
+        type=existing_file,
+        default=DEFAULT_SPK_RATE_CONFIG,
+        help="Path to the speaking rate config file",
+    )
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=7860)
+    args = parser.parse_args()
+
+    app.state.config_path = args.config
+    app.state.spk_rate_config_path = args.spk_rate_config
+    uvicorn.run(app, host=args.host, port=args.port, reload=False)
 
 
 if __name__ == "__main__":

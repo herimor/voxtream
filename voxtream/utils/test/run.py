@@ -10,7 +10,7 @@ from huggingface_hub import snapshot_download
 from tqdm.auto import tqdm
 
 from voxtream.generator import SpeechGenerator, SpeechGeneratorConfig
-from voxtream.utils.generator import set_seed
+from voxtream.utils.generator import set_seed, text_generator
 from voxtream.utils.test.asr import MODEL_POOL as ASR_MODELS, main as wer
 from voxtream.utils.test.spk_sim import main as spk_sim
 from voxtream.utils.test.utmos import main as utmos
@@ -45,10 +45,14 @@ def main(
     file_ext: str,
     dataset_dir: Path = None,
     enhance_prompt: bool = False,
+    config_path: Path = None,
+    full_stream: bool = False,
 ):
     set_seed()
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
-    with open(PROJECT_ROOT / "configs/generator.json") as f:
+    if config_path is None:
+        config_path = PROJECT_ROOT / "configs/generator.json"
+    with open(config_path) as f:
         config = SpeechGeneratorConfig(**json.load(f))
 
     with open(PROJECT_ROOT / "configs/speaking_rate.json") as f:
@@ -72,17 +76,25 @@ def main(
         else:
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
+        spk_rate = None
+        if speaking_rate is not None:
+            spk_rate = repeat(speaking_rate)
+
         speech_stream = speech_generator.generate_stream(
             prompt_audio_path=(dataset_dir / row.file_name).with_suffix(
                 f".{prompt_ext}"
             ),
-            text=row.text,
-            speaking_rate=repeat(speaking_rate) if speaking_rate is not None else None,
+            # full-stream: the text arrives one word at a time, as from a live source
+            text=text_generator(row.text) if full_stream else row.text,
+            speaking_rate=spk_rate,
             enhance_prompt=enhance_prompt,
         )
 
         audio_frames = [audio_frame for audio_frame, _ in speech_stream]
         sf.write(save_path, np.concatenate(audio_frames), config.mimi_sr)
+
+    # release the generator before the evaluation models are loaded
+    del speech_generator
 
     # Objective evaluation
     utmos(
@@ -160,6 +172,19 @@ if __name__ == "__main__":
         action="store_true",
         help="Enables prompt enhancement",
     )
+    parser.add_argument(
+        "-fs",
+        "--full-stream",
+        action="store_true",
+        help="Full-stream mode: feed the text one word at a time",
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=str,
+        help="Path to the generator config (default: configs/generator.json)",
+        default=None,
+    )
     args = parser.parse_args()
 
     main(
@@ -171,4 +196,6 @@ if __name__ == "__main__":
         file_ext=args.file_ext,
         dataset_dir=Path(args.dataset_dir) if args.dataset_dir else None,
         enhance_prompt=args.prompt_enhancement,
+        config_path=Path(args.config) if args.config else None,
+        full_stream=args.full_stream,
     )

@@ -1,3 +1,6 @@
+# VoXtream2.5 (train_v451): factored phoneme vocabulary, word-aligned crops of the
+# Emilia and HiFiTTS-2 stores, hybrid AR + MoG depth transformer head, all trained from
+# scratch. See configs/train_voxtream2.1.yaml for the recipe of VoXtream2.1.
 hydra:
   run:
     dir: experiments/${exp_name}
@@ -5,9 +8,12 @@ hydra:
 
 exp_name: voxtream_train
 model_repo: herimor/voxtream2
-dataset_repo: herimor/voxtream2-train
-dataset_base_dir: null
-dep_former_name: dep_former_csm.safetensors
+# the stores are built locally (voxtream/utils/dataset/README.md); dataset_repo is only
+# downloaded when dataset_base_dir is null
+dataset_repo: null
+dataset_base_dir: ???
+# pre-trained depth transformer of `model_repo`; null starts it from scratch
+dep_former_name: null
 dep_former_weight_path: null
 model_weight_path: null
 
@@ -15,6 +21,9 @@ batch_size: 64
 lr: 0.0002
 initial_lr: 0.00001
 max_epochs: 10
+# stop after this many optimizer steps whatever the epoch; -1 runs `max_epochs` out.
+# A short run is how a freshly built store is checked before committing a GPU week to it
+max_steps: -1
 warmup_epochs: 1
 weight_decay: 0.01
 precision: bf16-mixed
@@ -25,57 +34,102 @@ log_every_n_steps: 50
 gpus: -1
 logging_interval: step
 save_weights_only: true
+# checkpoint every N optimizer steps as well as at the end of an epoch; null is epoch
+# ends only, which writes nothing at all when a run stops mid-epoch on `max_steps`
+checkpoint_every_n_steps: null
+# -1 keeps every epoch
+save_top_k_epochs: -1
 strategy: ddp
 compile_forward: true
-freeze_dep_former: true
+shuffle: true
+# parameters kept as loaded, by name prefix
+freeze: []
+# Mimi codebooks define the latent space of the MoG head
+mimi_repo: kyutai/moshiko-pytorch-bf16
+mimi_name: tokenizer-e351c8d8-checkpoint125.safetensors
+# Local Mimi weights instead of `mimi_name` of `mimi_repo`
+mimi_weight_path: null
 
 dataset:
+  # see voxtream/dataset/__init__.py
+  name: aligned
+  # one store directory per dataset under dataset_base_dir, built by
+  # `emilia_train_arrays.py`; they are kept side by side instead of concatenated, so
+  # their flat arrays stay memory-mapped
   datasets:
-    emilia:
-      audio_codes: mimi_codes.npy
-      phoneme_sequence_map: phone_tokens.npy
-      phoneme_embedding_indices: phone_emb_indices.npy
-      semantic_label_shifts: sem_label_shifts.npy
-      spk_templates: spk_templates.npy
-      punctuation: punctuation.npy
-    hifitts2:
-      audio_codes: mimi_codes.npy
-      phoneme_sequence_map: phone_tokens.npy
-      phoneme_embedding_indices: phone_emb_indices.npy
-      semantic_label_shifts: sem_label_shifts.npy
-      spk_templates: spk_templates.npy
-      punctuation: punctuation.npy
+    emilia: emilia/40k/80sec
+    hifitts2: hifitts2/15k/80sec
 
   audio_delay_frames: 1
   pad_len: 1
-  semantic_label_pad: 2
-  num_phones_per_frame: 2
   dtype: int64
   cfg_prob: 0.1
-  prompt_length_sec:
-    - 3
-    - 10
   mimi_tps: 12.5
-  phoneme_index_map:
-    "0": 2
-    "1": 3
-    "2": 2
-    "3": 3
-    "4": 2
-    "5": 3
+  prompt_loss: true
+  # entries are checked against the crop settings once, at construction; the result is
+  # cached beside each store, so only the first run with a given crop config pays
+  validation_jobs: 16
+
+  crop:
+    crop_frames: 750 # 60 s of the 80 s entry
+    prompt_length_sec: [3, 10]
+    num_phones_per_frame: 2
+    # end of the crop
+    # how often a sentence end is preferred; an entry without one falls through to an
+    # open end, so the realized share is a little lower (~0.45 on Emilia)
+    eos_prob: 0.5
+    end_slack_frames: 125 # how far back from the fullest window an end may be drawn
+    min_content_frames: 250
+    min_end_pause_frames: 2 # 160 ms; over half of Emilia's sentence ends have no pause
+    max_end_pause_frames: 4 # at most 320 ms of it is held on the last phoneme
+    # frames of the closing pause the pointer spends on [EOS] instead. This is what
+    # supervises the step generation ends on; without it the model reads the end of the
+    # text as a pause before the next sentence and keeps talking
+    eos_hold_frames: 2
+    short_pause_frames: 1 # 80 ms, enough to end an open crop
+    # start of the crop
+    min_start_pause_frames: 1
+    # unaligned look-ahead past an open end, drawn per sample; the largest stays at the
+    # phoneme transformer's receptive field (~25 phonemes at max_look_ahead 5)
+    extra_phonemes: [8, 16, 32]
+    # label dropout, for a text stream that does not know what follows yet
+    drop_all_labels_prob: 0.05
+    drop_punct_prob: 0.1
+    drop_open_end_prob: 0.5
 
 model:
   phone_former: phone_former
   temp_former: temp_former
-  dep_former: dep_former_csm
-  phone_vocab_size: 125
+  # dep_former: 2 layers at half the MLP width of the 4-layer dep_former_csm of CSM
+  dep_former: dep_former
+  # root stream: PAD BOS EOS UNK PROMPT + the phoneme roots of the vocabulary
+  phone_root_vocab_size: 62
+  # prefix (PAD ˈ ˌ), suffix (PAD ː), punctuation (PAD . , ? !), end of word (PAD EOW)
+  phone_attr_vocab_sizes: [3, 2, 5, 2]
   audio_vocab_size: 2050
   audio_pad_size: 0
   embedding_dim: 1024
   spk_embedding_dim: 192
-  num_codebooks: 16
+  num_codebooks: 32
   num_phone_states: 6
-  amortization_divisor: 16
+  amortization_divisor: 4
   max_look_ahead: 5
+  # weights for look-ahead masks 1..5. A mask of `la` compounds into a receptive field of
+  # roughly 5 x la phonemes, so la=1 is the low-latency mode (5 phonemes of text) and
+  # la=5 the steady-state one (25). Both ends are weighted over the middle.
+  phone_la_weights: [0.25, 0.15, 0.15, 0.15, 0.30]
   audio_window_size: 625
   phone_window_size: 625
+  train_prompt_sink: true
+  # Depth transformer head: the first `mog_ar_levels` acoustic codebooks one by one with
+  # an AR head, then all remaining codebooks in a single Mixture of Gaussians step
+  dep_former_head: mog
+  mog_codebook_size: 2048
+  mog_latent_dim: 256
+  mog_num_components: 1024
+  mog_low_rank: 64
+  mog_num_layers: 3
+  mog_intermediate_dim: 4096
+  mog_min_log_std: -4.0
+  mog_label_smoothing: 0.01
+  mog_ar_levels: 3
