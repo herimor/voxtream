@@ -43,7 +43,7 @@ brew install espeak-ng
 
 ### Pip package
 ```bash
-pip install "voxtream>=0.2.6"
+pip install "voxtream>=0.2.7"
 ```
 
 ### Models
@@ -175,7 +175,7 @@ Zero-shot TTS performance on SEED test-en set:
 | [VoXtream](https://huggingface.co/herimor/voxtream)       | 3.24 | 0.524 | 3.92 |
 | [VoXtream2](https://huggingface.co/herimor/voxtream2)     | 1.45 | 0.679 | 3.56 |
 | [VoXtream2.1](https://huggingface.co/herimor/voxtream2.1) | 1.32 | 0.682 | 3.78 |
-| [VoXtream2.5](https://huggingface.co/herimor/voxtream2.5) | 1.34 | 0.714 | 3.89 |
+| [VoXtream2.5](https://huggingface.co/herimor/voxtream2.5) | 1.31 | 0.719 | 3.95 |
 
 ## Training
 
@@ -188,7 +188,7 @@ docker-compose -f .devcontainer/docker-compose.yaml build voxtream
 
 There are two recipes:
 
-- `configs/train.yaml`, VoXtream2.5: word-aligned crops of the Emilia and HiFiTTS-2 stores, the factored phoneme vocabulary and the hybrid AR + MoG depth transformer head, all trained from scratch. The stores are built locally (see [dataset](voxtream/utils/dataset/README.md)) and passed with `dataset_base_dir`.
+- `configs/train.yaml`, VoXtream2.5: word-aligned crops of the Emilia and HiFiTTS-2 stores, the factored phoneme vocabulary and the hybrid AR + MoG depth transformer head, all trained from scratch. The codebooks of the MoG step reach the temporal transformer as a linear projection of their latent, the sum of their codebook vectors, instead of their embeddings (`model.mog_input_codebooks`), so the generator does not quantize the latent the MoG head predicts: it projects it and hands the Mimi decoder the latent of the acoustic codebooks. The stores are built locally (see [dataset](voxtream/utils/dataset/README.md)) and passed with `dataset_base_dir`.
 ```bash
 GPU_IDS=0,1 docker-compose -f .devcontainer/docker-compose.yaml run voxtream python voxtream/train.py dataset_base_dir=/path/to/stores batch_size=12
 ```

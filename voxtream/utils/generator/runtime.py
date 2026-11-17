@@ -33,22 +33,43 @@ class MimiFrameDecoder:
     streaming state buffers, which `reset_streaming()` updates in place.
     """
 
-    def __init__(self, mimi: MimiModel):
+    def __init__(self, mimi: MimiModel, latent_scale: float = None):
+        """
+        Args:
+            latent_scale: for decoding from the latent of the acoustic codebooks, the
+                sum of their codebook vectors: what a latent of the model is
+                multiplied by to be one of Mimi (`mog_codebooks` are scaled)
+        """
         self.mimi = mimi
+        self.latent_scale = latent_scale
         disable = next(mimi.parameters()).device.type != "cuda"
         self._graphed_decode = CUDAGraphed(self._decode, disable=disable)
+        self._graphed_decode_latent = CUDAGraphed(self._decode_latent, disable=disable)
 
     def _decode(self, codes: torch.Tensor) -> torch.Tensor:
-        emb = self.mimi.decode_latent(codes)
+        return self._decode_emb(self.mimi.decode_latent(codes))
+
+    def _decode_latent(self, sem_codes: torch.Tensor, latents: torch.Tensor):
+        # what `decode_latent` does, the sum of the acoustic codebook vectors given
+        quantizer = self.mimi.quantizer
+        emb = quantizer.rvq_first.decode(sem_codes)
+        latents = (latents * self.latent_scale).to(emb.dtype)
+        return self._decode_emb(emb + quantizer.rvq_rest.output_proj(latents))
+
+    def _decode_emb(self, emb: torch.Tensor) -> torch.Tensor:
         emb = self.mimi._to_encoder_framerate(emb)
         if self.mimi.decoder_transformer is not None:
             (emb,) = self.mimi.decoder_transformer(emb)
         return self.mimi.decoder(emb).to(dtype=torch.float32)
 
-    def __call__(self, codes: torch.Tensor) -> torch.Tensor:
-        """Decode `codes` (batch, num_codebooks, 1). On CUDA the output is a static
-        graph buffer, overwritten by the next call."""
-        return self._graphed_decode(codes)
+    def __call__(self, codes: torch.Tensor, latents: torch.Tensor = None):
+        """Decode `codes` (batch, num_codebooks, 1), or the semantic `codes`
+        (batch, 1, 1) with the `latents` (batch, latent_dim, 1) of the acoustic
+        codebooks. On CUDA the output is a static graph buffer, overwritten by the
+        next call."""
+        if latents is None:
+            return self._graphed_decode(codes)
+        return self._graphed_decode_latent(codes, latents)
 
 
 # A decoded frame counts as sound above this level; below it the frame is silence and
@@ -70,15 +91,30 @@ def decode_audio_frame(
     frame: torch.Tensor,
     sem_code: torch.Tensor,
     mimi_vocab_size: int,
+    latent: torch.Tensor = None,
 ) -> Tuple[np.ndarray, torch.Tensor]:
-    """Decode predicted frame into audio."""
-    audio_frame = torch.cat([sem_code, frame[:, 1:]], dim=1)
-    audio_frame = torch.clamp(audio_frame, 0, int(mimi_vocab_size - 1)).to(torch.int64)
+    """
+    Decode predicted frame into audio.
+
+    Args:
+        latent: (1, latent_dim) latent of the acoustic codebooks of the frame, from a
+            model that leaves them unquantized (`mog_input_codebooks`); the decoder
+            reads it in place of the acoustic tokens
+    """
+    if latent is None:
+        codes = torch.cat([sem_code, frame[:, 1:]], dim=1)
+    else:
+        codes = sem_code
+    codes = torch.clamp(codes, 0, int(mimi_vocab_size - 1)).to(torch.int64)
+    codes = codes.unsqueeze(-1)
     sem_code = frame[:, :1]
 
     # .cpu() copies out of the static graph buffer.
-    audio_frame = mimi_decoder(audio_frame.unsqueeze(-1)).squeeze().cpu().numpy()
-    return audio_frame, sem_code
+    if latent is None:
+        audio_frame = mimi_decoder(codes)
+    else:
+        audio_frame = mimi_decoder(codes, latent.unsqueeze(-1))
+    return audio_frame.squeeze().cpu().numpy(), sem_code
 
 
 def update_indices_and_tokens(

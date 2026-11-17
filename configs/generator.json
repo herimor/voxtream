@@ -6,6 +6,8 @@
     "model_weight_path": null,
     "model_config_path": null,
     "phoneme_vocab_path": null,
+    "mog_input_proj_name": "mog_input_proj.safetensors",
+    "mog_input_proj_path": null,
     "hf_token": null,
     "num_codebooks": 32,
     "audio_delay_frames": 1,
@@ -41,7 +43,7 @@
     "topk": 50,
     "top_p": 0.9,
     "cfg_gamma": 1.5,
-    "cfg_ac_gamma": 1.75,
+    "cfg_ac_gamma": 2.0,
     "mog_cfg_gamma": 1.75,
     "phoneme_index_map": {
         "0": [

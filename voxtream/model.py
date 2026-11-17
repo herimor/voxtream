@@ -82,6 +82,18 @@ class ModelConfig:
     # (the input of the depth transformer, with the speaker embedding) and the latent of
     # the AR codebooks, so a frame takes `mog_ar_levels` depth transformer steps.
     mog_ar_levels: int = 3
+    # Trailing codebooks that reach the temporal transformer as a latent instead of
+    # tokens: the sum of their codebook vectors through a linear projection, in place
+    # of the sum of their embeddings. The generator then does not quantize those
+    # codebooks of the MoG step: what the quantized ones leave of the predicted latent
+    # goes through the projection, and the Mimi decoder reads the latent of the
+    # acoustic codebooks instead of their tokens. 0 leaves every codebook to its
+    # embedding, the MoG step quantized in full.
+    mog_input_codebooks: int = 0
+    # Share of the training samples whose frames after the acoustic prompt take that
+    # projection; the others, and the prompt, take the embeddings of all codebooks.
+    # Below 1 the model reads either input.
+    mog_input_prob: float = 1.0
 
     @property
     def flat_phone_vocab(self) -> bool:
@@ -111,6 +123,12 @@ class Model(nn.Module):
         self.dep_former, dep_former_dim = prepare_transformer(
             MODEL_POOL[config.dep_former]()
         )
+
+        # generation with `mog_input_codebooks`: the input of the temporal transformer
+        # for the codebooks the last frame left unquantized, and the latent of its
+        # acoustic codebooks for the Mimi decoder (None for a model without them)
+        self._latent_input = None
+        self.acoustic_latent = None
 
         self.phone_sink_attention = None
         if config.flat_phone_vocab:
@@ -161,7 +179,10 @@ class Model(nn.Module):
             (config.audio_vocab_size + config.audio_pad_size) * config.num_phone_states,
             bias=False,
         )
+        self.mog_input_proj = None
         if config.dep_former_head == "ar":
+            if config.mog_input_codebooks:
+                raise ValueError("mog_input_codebooks needs dep_former_head: mog")
             # zero, as the AR head of the MoG model, unless a pre-trained one is loaded
             self.audio_head = nn.Parameter(
                 torch.zeros(
@@ -175,6 +196,19 @@ class Model(nn.Module):
                     f"mog_ar_levels {num_ar} must leave at least one codebook to the AR "
                     "head and one to the MoG step"
                 )
+            num_mog = config.num_codebooks - 1 - num_ar
+            if not 0 <= config.mog_input_codebooks <= num_mog:
+                raise ValueError(
+                    f"mog_input_codebooks {config.mog_input_codebooks} must be among "
+                    f"the {num_mog} codebooks of the MoG step"
+                )
+            if config.mog_input_codebooks:
+                # zero, as the other projections of the MoG step start
+                self.mog_input_proj = nn.Linear(
+                    config.mog_latent_dim, config.embedding_dim
+                )
+                nn.init.zeros_(self.mog_input_proj.weight)
+                nn.init.zeros_(self.mog_input_proj.bias)
             self.mog_head = MoGHead(
                 hidden_dim=dep_former_dim,
                 latent_dim=config.mog_latent_dim,
@@ -448,31 +482,20 @@ class Model(nn.Module):
             self.temp_former.caches_are_enabled()
         ), "temp_former caches are not enabled"
 
-        local_input_pos, curr_temp_former_mask = self.sink_attention.get_context(
-            input_pos=input_pos,
-            phone_emb=phone_emb,
-            audio_tokens=audio_tokens,
-            temp_former=self.temp_former,
-            temp_former_causal_mask=self.temp_former_causal_mask,
-            embed_audio_tokens=self._embed_audio_tokens,
-        )
-
         audio_emb = self._embed_audio_tokens(audio_tokens)
         dtype = audio_emb.dtype
 
-        emb = torch.cat([phone_emb.unsqueeze(1), audio_emb], dim=1)
-        h = emb.sum(dim=1, dtype=dtype)
-
-        if h.size(1) == 1:
-            h = self._temp_former(h, local_input_pos, curr_temp_former_mask).to(
-                dtype=dtype
-            )
+        if self._latent_input is not None and audio_tokens.shape[2] == 1:
+            # a frame of the generator's own: the codebooks it did not quantize enter
+            # as the projection of their latent, as in training after the prompt
+            first = self.config.num_codebooks - self.config.mog_input_codebooks
+            h = phone_emb + audio_emb[:, :first].sum(dim=1, dtype=dtype)
+            h = (h + self._latent_input.unsqueeze(1)).to(dtype)
         else:
-            h = self.temp_former(
-                h, input_pos=local_input_pos, mask=curr_temp_former_mask
-            ).to(dtype=dtype)
+            emb = torch.cat([phone_emb.unsqueeze(1), audio_emb], dim=1)
+            h = emb.sum(dim=1, dtype=dtype)
 
-        last_h = h[:, -1, :]
+        last_h = self._temporal_step(h, input_pos)[:, -1, :]
         c0_logits = self.sem_head(last_h)
 
         c0_sample, pred_shift, cur_spk_rate_cnt = sample_semantic_token(
@@ -500,6 +523,12 @@ class Model(nn.Module):
                 acoustic_tokens = self.generate_acoustic_mog(
                     last_h, c0_embed, dtype, **self.mog_decoding_kwargs(config, cfg)
                 )
+            if self.mog_input_proj is not None:
+                acoustic_tokens, latent_input, acoustic_latent = acoustic_tokens
+                # copies: the next frame and the decoder read them after the buffers
+                # of a captured or compiled step have been reused
+                self._latent_input = latent_input.clone()
+                self.acoustic_latent = acoustic_latent.clone()
         else:
             acoustic_tokens = self.generate_acoustic_ar(
                 last_h=last_h,
@@ -510,10 +539,34 @@ class Model(nn.Module):
             )
         frame = torch.cat([c0_sample, acoustic_tokens], dim=1)
 
-        if input_pos.shape[1] == 1:
-            self.sink_attention.append_step(phone_emb, audio_tokens)
-
         return frame, pred_shift, cur_spk_rate_cnt
+
+    def _temporal_step(
+        self, inputs: torch.Tensor, input_pos: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Run the temporal transformer on its KV cache, within the sink attention window.
+
+        Args:
+            inputs: (batch_size, seq_len, dim) the acoustic prompt at the first call of
+                a stream, one position at every later one
+            input_pos: (batch_size, seq_len) positions in the stream
+
+        Returns:
+            (batch_size, seq_len, dim), or the last position alone
+        """
+        local_input_pos, mask = self.sink_attention.get_context(
+            input_pos=input_pos,
+            inputs=inputs,
+            temp_former=self.temp_former,
+            temp_former_causal_mask=self.temp_former_causal_mask,
+        )
+        if inputs.size(1) == 1:
+            h = self._temp_former(inputs, local_input_pos, mask)
+            self.sink_attention.append_step(inputs)
+        else:
+            h = self.temp_former(inputs, input_pos=local_input_pos, mask=mask)
+        return h.to(dtype=inputs.dtype)
 
     def generate_acoustic_ar(
         self,
@@ -597,7 +650,12 @@ class Model(nn.Module):
             ar_cfg_gamma, ar_temperature: see `sample_acoustic_token`, AR codebooks only
 
         Returns:
-            (batch_size', num_codebooks - 1) acoustic tokens, batch_size' is 1 with CFG
+            (batch_size', num_codebooks - 1) acoustic tokens, batch_size' is 1 with CFG.
+            With `mog_input_codebooks` the last of them are left unquantized, their
+            tokens zero, and two more tensors follow: (batch_size', embedding_dim) the
+            projection of what the quantized codebooks leave of the latent, the input
+            of the temporal transformer for the rest, and (batch_size', mog_latent_dim)
+            the latent of all acoustic codebooks, for the Mimi decoder
         """
         num_ar = self.config.mog_ar_levels
         curr_h = torch.cat([last_h.unsqueeze(1), c0_embed], dim=1)
@@ -633,13 +691,25 @@ class Model(nn.Module):
                 curr_h = ci_embed.repeat(last_h.shape[0] // ci_embed.shape[0], 1, 1)
                 curr_pos = curr_pos[:, -1:] + 1
 
-        prefix = prefix.repeat(h.size(0) // prefix.size(0), 1)
         z = self.mog_head.sample(
-            self._mog_input(h, last_h, prefix), cfg_gamma=cfg_gamma
+            self._mog_input(h, last_h, prefix.repeat(h.size(0) // prefix.size(0), 1)),
+            cfg_gamma=cfg_gamma,
         )
-        tokens.append(residual_quantize(z, self.mog_rvq_codebooks))
+        if self.mog_input_proj is None:
+            tokens.append(residual_quantize(z, self.mog_rvq_codebooks))
+            return torch.cat(tokens, dim=1)
 
-        return torch.cat(tokens, dim=1)
+        codes, residual = residual_quantize(
+            z, self.mog_rvq_codebooks, return_residual=True
+        )
+        unquantized = codes.new_zeros(codes.size(0), self.config.mog_input_codebooks)
+        latent_input = self.mog_input_proj(residual.to(dtype))
+        acoustic_latent = prefix.float() + z.float()
+        return (
+            torch.cat([*tokens, codes, unquantized], dim=1),
+            latent_input,
+            acoustic_latent,
+        )
 
     @staticmethod
     def mog_decoding_kwargs(config: SpeechGeneratorConfig, cfg: bool) -> dict:
@@ -665,7 +735,9 @@ class Model(nn.Module):
         Lay out the codebooks of the MoG step for `residual_quantize`. Called once the
         weights are loaded and on their device, before `generate_acoustic_mog`.
         """
-        levels = self.mog_codebooks[self.config.mog_ar_levels :]
+        # the codebooks of `mog_input_codebooks` are not quantized
+        last = self.config.num_codebooks - 1 - self.config.mog_input_codebooks
+        levels = self.mog_codebooks[self.config.mog_ar_levels : last]
         self.mog_rvq_codebooks = RVQCodebooks(levels)
 
     def _mog_input(
@@ -728,8 +800,13 @@ class Model(nn.Module):
         audio_emb = self._embed_audio_tokens(audio_tokens)
 
         # exclude last pad audio token
-        emb = torch.cat([phone_emb.unsqueeze(1), audio_emb[:, :, :-1]], dim=1)
-        emb = emb.sum(dim=1, dtype=phone_emb.dtype)
+        if self.mog_input_proj is None:
+            emb = torch.cat([phone_emb.unsqueeze(1), audio_emb[:, :, :-1]], dim=1)
+            emb = emb.sum(dim=1, dtype=phone_emb.dtype)
+        else:
+            emb = phone_emb + self._audio_input(
+                audio_emb[:, :, :-1], audio_tokens[:, :, :-1], prompt_lens
+            ).to(phone_emb.dtype)
 
         input_pos = (
             torch.arange(0, emb.shape[1]).unsqueeze(0).long().to(audio_emb.device)
@@ -758,6 +835,52 @@ class Model(nn.Module):
             h = h + spk_embeddings
 
         return sem_logits, h, audio_emb
+
+    def _audio_input(
+        self,
+        audio_emb: torch.Tensor,
+        audio_tokens: torch.Tensor,
+        prompt_lens: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """
+        Sum of the codebooks of a frame for the temporal transformer, with
+        `mog_input_codebooks`: in a share of the training samples (`mog_input_prob`)
+        the last codebooks of the frames after the acoustic prompt enter as the
+        projection of their latent, the sum of their codebook vectors, instead of the
+        sum of their embeddings. The prompt keeps its embeddings, as its tokens are
+        there at inference, and so does a frame with a special token in those
+        codebooks, which has no latent. Outside training every frame takes the
+        embeddings.
+
+        Args:
+            audio_emb: (batch_size, num_codebooks, seq_len, dim) embeddings
+            audio_tokens: (batch_size, num_codebooks, seq_len) their tokens
+            prompt_lens: (batch_size,) frames of acoustic prompt at the head
+
+        Returns:
+            (batch_size, seq_len, dim)
+        """
+        num_codebooks = self.config.num_codebooks
+        first = num_codebooks - self.config.mog_input_codebooks
+        head, tail = audio_emb[:, :first].sum(dim=1), audio_emb[:, first:].sum(dim=1)
+
+        tokens = audio_tokens[:, first:]
+        valid = (tokens < self.config.mog_codebook_size).all(dim=1)
+        tokens = tokens.clamp_max(self.config.mog_codebook_size - 1)
+        latent = 0
+        for i, codebook in enumerate(range(first, num_codebooks)):
+            latent = latent + self.mog_codebooks[codebook - 1][tokens[:, i]]
+        proj = self.mog_input_proj(latent.to(tail.dtype)).to(tail.dtype)
+
+        batch_size, seq_len = valid.shape
+        prob = self.config.mog_input_prob if self.training else 0.0
+        chosen = torch.rand(batch_size, 1, device=valid.device) < prob
+        # the position after the prompt reads the first acoustic frame the generator
+        # produces itself
+        pos = torch.arange(seq_len, device=valid.device).unsqueeze(0)
+        start = 0 if prompt_lens is None else prompt_lens.view(-1, 1)
+        use_latent = chosen & valid & (pos > start)
+        return head + torch.where(use_latent.unsqueeze(-1), proj, tail)
 
     def forward_audio(
         self,
@@ -999,6 +1122,8 @@ class Model(nn.Module):
         self.temp_former.reset_caches()
         self.dep_former.reset_caches()
         self.sink_attention.reset()
+        self._latent_input = None
+        self.acoustic_latent = None
         if self.phone_sink_attention is not None:
             self.phone_sink_attention.reset()
 

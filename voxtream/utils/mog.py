@@ -243,16 +243,20 @@ class RVQCodebooks:
         return self.codebooks.size(0)
 
 
-def residual_quantize(z: torch.Tensor, codebooks: RVQCodebooks) -> torch.Tensor:
+def residual_quantize(
+    z: torch.Tensor, codebooks: RVQCodebooks, return_residual: bool = False
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """Greedy residual quantization of latents with consecutive RVQ codebooks, as RVQ
     encoders do.
 
     Args:
         z: (batch_size, latent_dim) latents
         codebooks: codebooks of the levels to decode
+        return_residual: also return what the levels leave of the latents
 
     Returns:
-        (batch_size, num_levels) codes
+        (batch_size, num_levels) codes, and with `return_residual` the
+        (batch_size, latent_dim) residual
     """
     z = z.float()
     cb, cb_t, sq = codebooks.codebooks, codebooks.transposed, codebooks.sq_norms
@@ -265,7 +269,11 @@ def residual_quantize(z: torch.Tensor, codebooks: RVQCodebooks) -> torch.Tensor:
         z = z - cb[level][idx]
         codes.append(idx)
 
-    return torch.stack(codes, dim=-1)
+    if codes:
+        out = torch.stack(codes, dim=-1)
+    else:
+        out = torch.zeros((z.size(0), 0), dtype=torch.int64, device=z.device)
+    return (out, z) if return_residual else out
 
 
 def _load_mimi_quantizer(mimi_repo: str, mimi_name: str, mimi_weight_path: str = None):

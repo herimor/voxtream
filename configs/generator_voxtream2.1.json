@@ -6,6 +6,8 @@
     "model_weight_path": null,
     "model_config_path": null,
     "phoneme_vocab_path": null,
+    "mog_input_proj_name": null,
+    "mog_input_proj_path": null,
     "hf_token": null,
     "num_codebooks": 16,
     "audio_delay_frames": 1,

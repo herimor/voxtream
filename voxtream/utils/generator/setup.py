@@ -11,7 +11,7 @@ from voxtream.config import SpeechGeneratorConfig
 from voxtream.model import Model, ModelConfig
 from voxtream.utils.dataset.phoneme_vocab import PhonemeVocab
 from voxtream.utils.generator.flat_text import FlatPhonemeVocab
-from voxtream.utils.model import load_model_weights
+from voxtream.utils.model import load_model_weights, load_mog_input_proj
 
 
 def resolve_model_file(
@@ -26,6 +26,27 @@ def resolve_model_file(
     if Path(config.model_repo).is_dir():
         return str(Path(config.model_repo) / name)
     return hf_hub_download(config.model_repo, name, token=config.hf_token)
+
+
+def resolve_mog_input_proj(config: SpeechGeneratorConfig) -> str | None:
+    """The file of the latent input projection of the config, None without one."""
+    if config.mog_input_proj_name is None and config.mog_input_proj_path is None:
+        return None
+    return resolve_model_file(
+        config, config.mog_input_proj_name, config.mog_input_proj_path
+    )
+
+
+def load_generator_weights(
+    config: SpeechGeneratorConfig, weight_path: str
+) -> Dict[str, torch.Tensor]:
+    """The weights of the model of the config: those of `weight_path` with the latent
+    input projection of the config, when it has one in a file of its own."""
+    state_dict = load_model_weights(weight_path)
+    proj_path = resolve_mog_input_proj(config)
+    if proj_path is not None:
+        state_dict.update(load_mog_input_proj(proj_path)[1])
+    return state_dict
 
 
 def build_generator_model(
@@ -50,6 +71,10 @@ def build_generator_model(
         k: v for k, v in model_config_params.items() if k in field_names
     }
     model_config = ModelConfig(**model_config_params)
+    proj_path = resolve_mog_input_proj(config)
+    if proj_path is not None:
+        # the projection of a model released without one: its file names the codebooks
+        model_config.mog_input_codebooks = load_mog_input_proj(proj_path)[0]
     if config.audio_window_size is not None:
         model_config.audio_window_size = config.audio_window_size
 
@@ -102,7 +127,7 @@ def load_generator_model(
     """
     model, vocab, weight_path = build_generator_model(config)
 
-    state_dict = load_model_weights(weight_path)
+    state_dict = load_generator_weights(config, weight_path)
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     assert (
         len(missing) == 0 and len(unexpected) == 0

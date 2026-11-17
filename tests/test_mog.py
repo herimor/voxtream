@@ -336,3 +336,191 @@ def test_trainer_loads_pretrained_and_freezes(tmp_path):
     assert "audio_embeddings.weight" not in trainable
     assert any(n.startswith("dep_former.") for n in trainable)
     assert "sem_head.weight" in trainable
+
+
+def test_latent_input_of_the_temporal_transformer():
+    """With `mog_input_codebooks` the last codebooks of a share of the training samples
+    reach the temporal transformer as the projection of their latent: only after the
+    acoustic prompt, only where they hold codes, and never outside training. The
+    losses and the inputs of the depth transformer are untouched."""
+    from voxtream.model import Model
+
+    with pytest.raises(ValueError):
+        Model(_tiny_config(mog_input_codebooks=2))  # the MoG step has one codebook
+    with pytest.raises(ValueError):
+        Model(_tiny_config(dep_former_head="ar", mog_input_codebooks=1))
+
+    model = _tiny_model(mog_input_codebooks=1, mog_input_prob=1.0)
+    assert not model.mog_input_proj.weight.any()  # starts by leaving the codebook out
+    with torch.no_grad():
+        model.mog_input_proj.weight.normal_()
+        model.mog_input_proj.bias.normal_()
+    phone_tokens, emb_idx, audio, spk = _tiny_batch()
+    audio[0, 3, 12] = 17  # a special token in the last codebook
+    prompt_lens = torch.tensor([5, 8])
+    tokens = audio[:, :, :-1]
+    emb = model._embed_audio_tokens(tokens)
+    full = emb.sum(1)
+    latent = model.mog_input_proj(model.mog_codebooks[2][tokens[:, 3].clamp_max(15)])
+    expected = emb[:, :3].sum(1) + latent
+
+    model.train()
+    out = model._audio_input(emb, tokens, prompt_lens)
+    for b, prompt_len in enumerate(prompt_lens.tolist()):
+        special = (tokens[b, 3] >= 16).nonzero().flatten().tolist()
+        for t in range(tokens.shape[2]):
+            ref = full if t <= prompt_len or t in special else expected
+            assert torch.allclose(out[b, t], ref[b, t], atol=1e-5), (b, t)
+    assert 12 in (tokens[0, 3] >= 16).nonzero().flatten().tolist()
+
+    # a share of the samples only, and none outside training
+    model.config.mog_input_prob = 0.0
+    assert torch.allclose(model._audio_input(emb, tokens, prompt_lens), full, atol=1e-5)
+    model.config.mog_input_prob = 1.0
+    model.eval()
+    assert torch.allclose(model._audio_input(emb, tokens, prompt_lens), full, atol=1e-5)
+
+    # the model trains with it: every parameter gets a gradient (DDP)
+    model.train()
+    sem_logits, out, rand_idx = model(
+        phone_tokens, emb_idx, audio, prompt_lens, spk, audio
+    )
+    losses = model.mog_loss(out, audio[:, 1:, 1:][..., rand_idx])
+    (losses["loss"] + sem_logits.float().mean()).backward()
+    unused = [
+        n for n, p in model.named_parameters() if p.requires_grad and p.grad is None
+    ]
+    assert not unused, unused
+    assert model.mog_input_proj.weight.grad.abs().sum() > 0
+
+
+def test_generation_with_unquantized_codebooks():
+    """With `mog_input_codebooks` the MoG step quantizes only the codebooks before
+    them: the rest of the predicted latent goes through the projection into the next
+    input of the temporal transformer, in place of the embeddings of those codebooks,
+    and the latent of all acoustic codebooks is kept for the Mimi decoder."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    model = _tiny_model(
+        num_codebooks=6, mog_input_codebooks=2
+    ).eval()  # 2 AR, 1 + 2 MoG
+    with torch.no_grad():
+        model.mog_input_proj.weight.normal_()
+        model.mog_input_proj.bias.normal_()
+    model.setup_caches(max_batch_size=2, dtype=torch.float32)
+    assert len(model.mog_rvq_codebooks) == 1
+
+    last_h = torch.randn(2, 32)
+    c0_embed = model._embed_audio(0, torch.tensor([[5], [7]]))
+    tokens, latent_input, acoustic_latent = model.generate_acoustic_mog(
+        last_h, c0_embed, torch.float32
+    )
+    assert tokens.shape == (2, 5) and not tokens[:, 3:].any()
+    rows = torch.arange(2)
+    cb = model.mog_codebooks
+    quantized = cb[0, tokens[:, 0]] + cb[1, tokens[:, 1]] + cb[2, tokens[:, 2]]
+    # the latent of the acoustic codebooks is that of the tokens plus the rest
+    residual = acoustic_latent - quantized
+    assert torch.allclose(latent_input, model.mog_input_proj(residual), atol=1e-4)
+    # and the quantized MoG codebook is the nearest to the predicted latent
+    z = acoustic_latent - cb[0, tokens[:, 0]] - cb[1, tokens[:, 1]]
+    nearest = (z[:, None] - cb[2][None]).pow(2).sum(-1).argmin(-1)
+    assert torch.equal(nearest, tokens[:, 2]) and rows.numel() == 2
+
+    # frame by frame: the prompt reads the embeddings of all its codebooks, a frame of
+    # the generator's own the projection for the unquantized ones
+    config = SimpleNamespace(
+        temperature=0.9, top_p=0.9, topk=5, cfg_ac_gamma=2.0, mog_cfg_gamma=1.5
+    )
+    g = torch.Generator().manual_seed(1)
+    phone_emb = torch.randn(2, 8, 32, generator=g)
+    audio = torch.randint(0, 16, (2, 6, 8), generator=g)
+    model.reset_caches()
+    assert model.acoustic_latent is None
+
+    def step(frames, audio_tokens, pos):
+        return model.generate_frame(
+            config=config,
+            phone_emb=phone_emb[:, frames],
+            audio_tokens=audio_tokens,
+            input_pos=pos,
+            spk_embeddings=torch.zeros(2, 32),
+            cfg_gamma=1.5,
+            spk_rate_weight=None,
+            cur_spk_rate_cnt=None,
+            target_spk_rate_cnt=None,
+        )[0]
+
+    with patch.object(model, "_temporal_step", wraps=model._temporal_step) as temporal:
+        frame = step(slice(0, 6), audio[:, :, :6], torch.arange(6).unsqueeze(0))
+        prompt_input = temporal.call_args.args[0]
+        expected = phone_emb[:, :6] + model._embed_audio_tokens(audio[:, :, :6]).sum(1)
+        assert torch.allclose(prompt_input, expected, atol=1e-5)
+
+        assert frame.shape == (1, 6) and not frame[:, 4:].any()
+        latent_input = model._latent_input.clone()
+        assert model.acoustic_latent.shape == (1, 8)
+        fed = frame.unsqueeze(2).repeat(2, 1, 1)
+        step(slice(6, 7), fed, torch.tensor([[6]]))
+        emb = model._embed_audio_tokens(fed)
+        expected = phone_emb[:, 6:7] + emb[:, :4].sum(1) + latent_input.unsqueeze(1)
+        assert torch.allclose(temporal.call_args.args[0], expected, atol=1e-5)
+
+    model.reset_caches()
+    assert model._latent_input is None and model.acoustic_latent is None
+
+
+def test_latent_projection_in_a_file_of_its_own(tmp_path):
+    """The projection of a model released without one is a file next to the weights:
+    it names the codebooks it was trained for, and the generator loads the weights
+    with it."""
+    from types import SimpleNamespace
+
+    from safetensors.torch import save_file
+
+    from voxtream.utils.generator.setup import (
+        load_generator_weights,
+        resolve_mog_input_proj,
+    )
+    from voxtream.utils.model import load_mog_input_proj, save_mog_input_proj
+
+    torch.manual_seed(0)
+    model = _tiny_model(mog_input_codebooks=1)
+    with torch.no_grad():
+        model.mog_input_proj.weight.normal_()
+    state = model.state_dict()
+    released = {k: v for k, v in state.items() if not k.startswith("mog_input_proj.")}
+    weight_path, name = tmp_path / "model.safetensors", "mog_input_proj.safetensors"
+    save_file(released, str(weight_path))
+    save_mog_input_proj(state, 1, str(tmp_path / name))
+
+    num_codebooks, weights = load_mog_input_proj(str(tmp_path / name))
+    assert num_codebooks == 1
+    assert set(weights) == {"mog_input_proj.weight", "mog_input_proj.bias"}
+
+    config = SimpleNamespace(
+        model_repo=str(tmp_path),
+        mog_input_proj_name=name,
+        mog_input_proj_path=None,
+        hf_token=None,
+    )
+    assert resolve_mog_input_proj(config) == str(tmp_path / name)
+    loaded = load_generator_weights(config, str(weight_path))
+    assert set(loaded) == set(state)
+    for k, v in state.items():
+        assert torch.equal(loaded[k], v), k
+
+    # a local file takes the place of the one of the repo; without either the
+    # weights are loaded as they are
+    config.mog_input_proj_path = "/elsewhere/proj.safetensors"
+    assert resolve_mog_input_proj(config) == "/elsewhere/proj.safetensors"
+    config.mog_input_proj_name = config.mog_input_proj_path = None
+    assert resolve_mog_input_proj(config) is None
+    assert set(load_generator_weights(config, str(weight_path))) == set(released)
+
+    with pytest.raises(ValueError, match="no latent input projection"):
+        save_mog_input_proj(released, 1, str(tmp_path / "none.safetensors"))
+    save_file(weights, str(tmp_path / "bare.safetensors"))
+    with pytest.raises(ValueError, match="mog_input_codebooks"):
+        load_mog_input_proj(str(tmp_path / "bare.safetensors"))

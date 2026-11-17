@@ -26,6 +26,13 @@ class SpeechGeneratorConfig:
     model_weight_path: str
     model_config_path: str
     phoneme_vocab_path: str
+    # Latent input projection of the model (`ModelConfig.mog_input_codebooks`) kept in
+    # a file of its own, apart from the weights: `mog_input_proj_name` of
+    # `model_repo`, or the local `mog_input_proj_path`. The file names the codebooks
+    # it was trained for, which replace `mog_input_codebooks` of the model config.
+    # Both None: the model has no projection, or its weights hold it.
+    mog_input_proj_name: str
+    mog_input_proj_path: str
     hf_token: str
 
     # -- audio codec and speaker encoder ------------------------------------------------

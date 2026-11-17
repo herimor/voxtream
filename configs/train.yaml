@@ -133,3 +133,13 @@ model:
   mog_min_log_std: -4.0
   mog_label_smoothing: 0.01
   mog_ar_levels: 3
+  # Latent input of the temporal transformer: the last `mog_input_codebooks` codebooks
+  # reach it as a linear projection of their latent, the sum of their codebook vectors,
+  # instead of their embeddings. 28 is every codebook of the MoG step: the generator
+  # then quantizes none of them, projects the latent the MoG head predicts and hands
+  # the Mimi decoder the latent of the acoustic codebooks. 0 trains on the embeddings
+  # of all codebooks, the MoG step quantized in full at inference.
+  mog_input_codebooks: 28
+  # share of the training samples whose generated frames take the projection; the
+  # acoustic prompt always takes the embeddings
+  mog_input_prob: 1.0

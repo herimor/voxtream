@@ -4,7 +4,8 @@ import logging
 
 import torch
 import torch.nn as nn
-from safetensors.torch import load_file
+from safetensors import safe_open
+from safetensors.torch import load_file, save_file
 
 from voxtream.config import SpeechGeneratorConfig
 from voxtream.utils.sampling import sample_top_k, sample_top_p
@@ -33,6 +34,39 @@ def load_model_weights(path: str) -> dict[str, torch.Tensor]:
         k = k.replace("model.", "")
         state_dict[k] = v
     return state_dict
+
+
+MOG_INPUT_PROJ_PREFIX = "mog_input_proj."
+MOG_INPUT_CODEBOOKS_KEY = "mog_input_codebooks"
+
+
+def save_mog_input_proj(
+    state_dict: dict[str, torch.Tensor], num_codebooks: int, path: str
+) -> None:
+    """
+    Write the latent input projection of a model to a safetensors file of its own:
+    its tensors, under their names in the model, and the codebooks it was trained for
+    (`ModelConfig.mog_input_codebooks`) in the metadata. A model whose other weights
+    are those of a release is then that release and this file.
+    """
+    weights = {
+        k: v.contiguous()
+        for k, v in state_dict.items()
+        if k.startswith(MOG_INPUT_PROJ_PREFIX)
+    }
+    if not weights:
+        raise ValueError("the weights hold no latent input projection")
+    metadata = {"format": "pt", MOG_INPUT_CODEBOOKS_KEY: str(num_codebooks)}
+    save_file(weights, str(path), metadata=metadata)
+
+
+def load_mog_input_proj(path: str) -> tuple[int, dict[str, torch.Tensor]]:
+    """The codebooks and the tensors of a file of `save_mog_input_proj`."""
+    with safe_open(str(path), framework="pt") as f:
+        metadata = f.metadata() or {}
+    if MOG_INPUT_CODEBOOKS_KEY not in metadata:
+        raise ValueError(f"{path} does not name its {MOG_INPUT_CODEBOOKS_KEY}")
+    return int(metadata[MOG_INPUT_CODEBOOKS_KEY]), load_file(str(path))
 
 
 def get_llama3_2(

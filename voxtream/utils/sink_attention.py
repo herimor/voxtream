@@ -24,16 +24,22 @@ class SinkAttentionConfig:
 
 
 class SinkAttention:
+    """
+    Bounded context of the temporal transformer: the acoustic prompt and the most
+    recent frames. When the KV cache is full it is rebuilt from the inputs of the
+    prompt and of a tail of recent frames, which are kept here for that: the inputs
+    as the temporal transformer read them, since a frame whose last codebooks were
+    left unquantized (`ModelConfig.mog_input_codebooks`) has no tokens to embed again.
+    """
+
     def __init__(self, config: SinkAttentionConfig):
         self.config = config
         self.reset()
 
     def reset(self) -> None:
         self._sink_prompt_len = None
-        self._sink_prompt_phone_emb = None
-        self._sink_prompt_audio_tokens = None
-        self._sink_phone_emb_buf = []
-        self._sink_audio_tokens_buf = []
+        self._sink_prompt_inputs = None
+        self._sink_inputs_buf = []
         self._sink_pos_offset = 0
         self._restart_pending = False
 
@@ -41,25 +47,33 @@ class SinkAttention:
         """Drop the generated context: the next step attends to the prompt alone, as the
         first step of the utterance did. Frames generated from there fill the window
         again as usual."""
-        self._sink_phone_emb_buf = []
-        self._sink_audio_tokens_buf = []
+        self._sink_inputs_buf = []
         self._restart_pending = True
 
     def get_context(
         self,
         input_pos: torch.Tensor,
-        phone_emb: torch.Tensor,
-        audio_tokens: torch.Tensor,
+        inputs: torch.Tensor,
         temp_former,
         temp_former_causal_mask: torch.Tensor,
-        embed_audio_tokens: Callable[[torch.Tensor], torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Positions in the cache and the attention mask of a call of the temporal
+        transformer. The first call of a stream holds the acoustic prompt. A later
+        call of one frame that no longer fits the cache rebuilds it first.
+
+        Args:
+            input_pos: (batch_size, seq_len) positions in the stream
+            inputs: (batch_size, seq_len, dim) inputs of the temporal transformer
+
+        Returns:
+            (batch_size, seq_len) positions in the cache
+            (batch_size, seq_len, max_seq_len) mask, see `_get_temp_former_sink_mask`
+        """
         if self._sink_prompt_len is None:
             self._sink_prompt_len = int(input_pos.shape[1])
-            self._sink_prompt_phone_emb = phone_emb.detach()
-            self._sink_prompt_audio_tokens = audio_tokens.detach()
-            self._sink_phone_emb_buf = []
-            self._sink_audio_tokens_buf = []
+            self._sink_prompt_inputs = inputs.detach()
+            self._sink_inputs_buf = []
             self._sink_pos_offset = 0
 
         local_input_pos = input_pos
@@ -69,10 +83,7 @@ class SinkAttention:
             if local_pos >= self.config.audio_window_size or self._restart_pending:
                 self._restart_pending = False
                 self._rebuild_temp_former_cache(
-                    global_pos,
-                    temp_former,
-                    temp_former_causal_mask,
-                    embed_audio_tokens,
+                    global_pos, temp_former, temp_former_causal_mask
                 )
             local_input_pos = input_pos - self._sink_pos_offset
 
@@ -82,12 +93,15 @@ class SinkAttention:
 
         return local_input_pos, curr_temp_former_mask
 
-    def append_step(self, phone_emb: torch.Tensor, audio_tokens: torch.Tensor) -> None:
+    def append_step(self, inputs: torch.Tensor) -> None:
+        """
+        Args:
+            inputs: (batch_size, 1, dim) input of a generated frame
+        """
         if self._sink_prompt_len is None:
             return
 
-        self._sink_phone_emb_buf.append(phone_emb.detach())
-        self._sink_audio_tokens_buf.append(audio_tokens.detach())
+        self._sink_inputs_buf.append(inputs.detach())
         self._trim_sink_buffers()
 
     def _get_temp_former_sink_mask(
@@ -159,49 +173,30 @@ class SinkAttention:
             tail_budget,
         )
         if tail_limit <= 0:
-            self._sink_phone_emb_buf = []
-            self._sink_audio_tokens_buf = []
-            return
-        if len(self._sink_phone_emb_buf) > tail_limit:
-            self._sink_phone_emb_buf = self._sink_phone_emb_buf[-tail_limit:]
-        if len(self._sink_audio_tokens_buf) > tail_limit:
-            self._sink_audio_tokens_buf = self._sink_audio_tokens_buf[-tail_limit:]
+            self._sink_inputs_buf = []
+        elif len(self._sink_inputs_buf) > tail_limit:
+            self._sink_inputs_buf = self._sink_inputs_buf[-tail_limit:]
 
     def _rebuild_temp_former_cache(
         self,
         global_pos: int,
         temp_former,
         temp_former_causal_mask: torch.Tensor,
-        embed_audio_tokens: Callable[[torch.Tensor], torch.Tensor],
     ) -> None:
-        if (
-            self._sink_prompt_phone_emb is None
-            or self._sink_prompt_audio_tokens is None
-        ):
+        """Refill the cache with the prompt and the recent tail, re-encoded from their
+        inputs, so that the frame `global_pos` of the stream lands right after."""
+        if self._sink_prompt_inputs is None:
             return
 
         self._trim_sink_buffers()
-        if self._sink_phone_emb_buf:
-            tail_phone_emb = torch.cat(self._sink_phone_emb_buf, dim=1)
-            tail_audio_tokens = torch.cat(self._sink_audio_tokens_buf, dim=2)
-            phone_emb = torch.cat([self._sink_prompt_phone_emb, tail_phone_emb], dim=1)
-            audio_tokens = torch.cat(
-                [self._sink_prompt_audio_tokens, tail_audio_tokens], dim=2
-            )
-        else:
-            phone_emb = self._sink_prompt_phone_emb
-            audio_tokens = self._sink_prompt_audio_tokens
+        inputs = torch.cat([self._sink_prompt_inputs, *self._sink_inputs_buf], dim=1)
 
-        seq_len = phone_emb.shape[1]
+        seq_len = inputs.shape[1]
         input_pos = (
-            torch.arange(0, seq_len, device=phone_emb.device)
+            torch.arange(0, seq_len, device=inputs.device)
             .unsqueeze(0)
-            .repeat(phone_emb.size(0), 1)
+            .repeat(inputs.size(0), 1)
         )
-
-        audio_emb = embed_audio_tokens(audio_tokens)
-        emb = torch.cat([phone_emb.unsqueeze(1), audio_emb], dim=1)
-        h = emb.sum(dim=1, dtype=audio_emb.dtype)
 
         temp_former.reset_caches()
         mask = self._get_temp_former_sink_mask(
@@ -209,7 +204,7 @@ class SinkAttention:
             temp_former_causal_mask,
             global_pos=input_pos + (global_pos - seq_len),
         )
-        temp_former(h, input_pos=input_pos, mask=mask).to(dtype=audio_emb.dtype)
+        temp_former(inputs, input_pos=input_pos, mask=mask)
 
         self._sink_pos_offset = global_pos - seq_len
 

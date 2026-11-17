@@ -230,6 +230,15 @@ class SpeechGenerator:
         else:
             configure_cpu_threads(config.cpu_threads)
 
+        # A model that leaves acoustic codebooks unquantized hands the Mimi decoder
+        # their latent; its latents are Mimi's divided by a scalar (`mog_codebooks`)
+        self._mimi_latent_scale = None
+        if self.model.mog_input_proj is not None:
+            codebook = self.mimi.quantizer.rvq_rest.vq.layers[0]._codebook.embedding
+            self._mimi_latent_scale = float(
+                codebook.float().norm() / self.model.mog_codebooks[0].float().norm()
+            )
+
         self._mimi_stream_ctx = None
         self._mimi_streaming_started = False
         self._mimi_decoder: MimiFrameDecoder | None = None
@@ -244,7 +253,9 @@ class SpeechGenerator:
             self._mimi_stream_ctx.__enter__()
             self._mimi_streaming_started = True
             # New streaming state buffers, so the decode graph must be captured again.
-            self._mimi_decoder = MimiFrameDecoder(self.mimi)
+            self._mimi_decoder = MimiFrameDecoder(
+                self.mimi, latent_scale=self._mimi_latent_scale
+            )
         else:
             self.mimi.reset_streaming()
 
@@ -561,6 +572,7 @@ class SpeechGenerator:
                     frame=frame,
                     sem_code=sem_code,
                     mimi_vocab_size=self.config.mimi_vocab_size,
+                    latent=self.model.acoustic_latent,
                 )
                 gen_time = time.perf_counter() - start_time
                 generated_audio_frames += 1
